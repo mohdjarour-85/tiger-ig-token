@@ -479,8 +479,8 @@ async function runScheduledPosts(env) {
       await env.DB.prepare("UPDATE scheduled_posts SET status = 'posted', post_id = ? WHERE id = ?")
         .bind(publishData.id, post.id).run();
     } catch (e) {
-      await env.DB.prepare("UPDATE scheduled_posts SET status = 'failed' WHERE id = ?")
-        .bind(post.id).run();
+      await env.DB.prepare("UPDATE scheduled_posts SET status = 'failed', error_message = ? WHERE id = ?")
+        .bind(String(e), post.id).run();
     }
   }
 }
