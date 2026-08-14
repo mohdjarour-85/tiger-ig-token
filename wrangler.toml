@@ -10,3 +10,6 @@ bucket_name = "tiger-ig-images"
 binding = "DB"
 database_name = "tiger-ig-schedule"
 database_id = "e38a9f6f-548a-4f93-af82-1e76ec6e3a47"
+
+[triggers]
+crons = ["*/15 * * * *"]
