@@ -213,7 +213,7 @@ if (url.pathname === "/publish") {
               if (data.isVideo) {
                 await pollStatus(data.containerId);
               }
-              statusDiv.innerHTML = '<p>⏳ جاري النشر النهائي...</p>';
+              statusDiv.innerHTML = '<p>⏳ جاري النشر النهائي... (id: ' + data.containerId + ')</p>';
               const finalRes = await fetch('/finalize?id=' + data.containerId);
               const finalData = await finalRes.json();
               if (finalData.success) {
