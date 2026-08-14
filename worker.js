@@ -273,7 +273,8 @@ export default {
             if (btn.disabled) return;
             const fileInput = document.getElementById('img');
             const caption = document.getElementById('cap').value;
-            const dt = document.getElementById('dt').value;
+            const dtLocal = document.getElementById('dt').value;
+            const dt = dtLocal ? new Date(dtLocal).toISOString().slice(0, 16) : '';
             const statusDiv = document.getElementById('status');
             if (!fileInput.files[0] || !dt) {
               statusDiv.innerHTML = '<p>لازم تختار ملف ووقت النشر</p>';
