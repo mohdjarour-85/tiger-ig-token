@@ -150,6 +150,100 @@ if (url.pathname === "/publish") {
         return html(errorBlock("خطأ غير متوقع بالنشر", String(e)));
       }
 }
+    if (url.pathname === "/new") {
+      return html(`
+        <h1>Tiger Event — نشر صورة جديدة</h1>
+        <form id="f">
+          <p>اختر الصورة:</p>
+          <input type="file" id="img" accept="image/*" required>
+          <p>الكابشن:</p>
+          <textarea id="cap" placeholder="اكتب الكابشن هنا..." style="min-height:120px;"></textarea>
+          <button type="submit" class="btn" style="border:none;cursor:pointer;">نشر الآن</button>
+        </form>
+        <div id="status" style="margin-top:16px;"></div>
+        <script>
+          document.getElementById('f').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fileInput = document.getElementById('img');
+            const caption = document.getElementById('cap').value;
+            const statusDiv = document.getElementById('status');
+            if (!fileInput.files[0]) return;
+            statusDiv.innerHTML = '<p>⏳ جاري الرفع والنشر...</p>';
+            const formData = new FormData();
+            formData.append('image', fileInput.files[0]);
+            formData.append('caption', caption);
+            try {
+              const res = await fetch('/upload-and-publish', { method: 'POST', body: formData });
+              const data = await res.json();
+              if (data.success) {
+                statusDiv.innerHTML = '<h1>✅ تم النشر بنجاح</h1><p>Post ID: ' + data.postId + '</p>';
+              } else {
+                statusDiv.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+              }
+            } catch (err) {
+              statusDiv.innerHTML = '<pre>خطأ: ' + err + '</pre>';
+            }
+          });
+        </script>
+      `);
+    }
+
+    if (url.pathname === "/upload-and-publish") {
+      if (!env.IG_ACCESS_TOKEN || !env.IMAGES) {
+        return new Response(JSON.stringify({ success: false, error: "الإعداد ناقص (توكن أو R2)" }), { headers: { "content-type": "application/json" } });
+      }
+      try {
+        const formData = await request.formData();
+        const file = formData.get("image");
+        const caption = formData.get("caption") || "";
+        if (!file) {
+          return new Response(JSON.stringify({ success: false, error: "ما وصلت صورة" }), { headers: { "content-type": "application/json" } });
+        }
+
+        const ext = file.name.split(".").pop() || "jpg";
+        const key = `posts/${Date.now()}.${ext}`;
+        await env.IMAGES.put(key, file.stream(), {
+          httpMetadata: { contentType: file.type },
+        });
+
+        const imageUrl = `https://${url.hostname}/img/${key}`;
+
+        const meRes = await fetch(`https://graph.instagram.com/me?fields=id&access_token=${env.IG_ACCESS_TOKEN}`);
+        const meData = await meRes.json();
+        if (!meData.id) {
+          return new Response(JSON.stringify({ success: false, error: "معرف الحساب", detail: meData }), { headers: { "content-type": "application/json" } });
+        }
+
+        const containerRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media`, {
+          method: "POST",
+          body: new URLSearchParams({ image_url: imageUrl, caption: caption, access_token: env.IG_ACCESS_TOKEN }),
+        });
+        const containerData = await containerRes.json();
+        if (!containerData.id) {
+          return new Response(JSON.stringify({ success: false, error: "إنشاء الحاوية", detail: containerData }), { headers: { "content-type": "application/json" } });
+        }
+
+        const publishRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media_publish`, {
+          method: "POST",
+          body: new URLSearchParams({ creation_id: containerData.id, access_token: env.IG_ACCESS_TOKEN }),
+        });
+        const publishData = await publishRes.json();
+        if (!publishData.id) {
+          return new Response(JSON.stringify({ success: false, error: "النشر", detail: publishData }), { headers: { "content-type": "application/json" } });
+        }
+
+        return new Response(JSON.stringify({ success: true, postId: publishData.id }), { headers: { "content-type": "application/json" } });
+      } catch (e) {
+        return new Response(JSON.stringify({ success: false, error: String(e) }), { headers: { "content-type": "application/json" } });
+      }
+    }
+
+    if (url.pathname.startsWith("/img/")) {
+      const key = url.pathname.replace("/img/", "");
+      const obj = await env.IMAGES.get(key);
+      if (!obj) return new Response("Not found", { status: 404 });
+      return new Response(obj.body, { headers: { "content-type": obj.httpMetadata?.contentType || "image/jpeg" } });
+    }
     return html(errorBlock("الصفحة مو موجودة", "جرب /start"));
   },
 };
