@@ -195,10 +195,13 @@ if (url.pathname === "/publish") {
           }
 
           document.getElementById('publishBtn').addEventListener('click', async function(){
-            const fileInput = document.getElementById('img');
-            const caption = document.getElementById('cap').value;
-            const statusDiv = document.getElementById('status');
-            if (!fileInput.files[0]) return;
+  const btn = this;
+  if (btn.disabled) return;
+  const fileInput = document.getElementById('img');
+  const caption = document.getElementById('cap');
+  const statusDiv = document.getElementById('status');
+  if (!fileInput.files[0]) return;
+  btn.disabled = true;
             statusDiv.innerHTML = '<p>⏳ جاري الرفع...</p>';
             const formData = new FormData();
             formData.append('image', fileInput.files[0]);
@@ -221,9 +224,11 @@ if (url.pathname === "/publish") {
               } else {
                 statusDiv.innerHTML = '<pre>' + JSON.stringify(finalData, null, 2) + '</pre>';
               }
-            } catch (err) {
-              statusDiv.innerHTML = '<pre>خطأ: ' + err + '</pre>';
-            }
+                } catch (err) {
+      statusDiv.innerHTML = '<pre>خطأ...
+       } finally {
+      btn.disabled = false;
+    }
           });
         </script>
       `);
