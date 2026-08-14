@@ -457,16 +457,17 @@ async function runScheduledPosts(env) {
       const containerData = await containerRes.json();
       if (!containerData.id) throw new Error("إنشاء الحاوية: " + JSON.stringify(containerData));
 
-      if (isVideo) {
+      {
         let ready = false;
-        for (let i = 0; i < 20; i++) {
-          await new Promise((r) => setTimeout(r, 5000));
+        const maxTries = isVideo ? 20 : 6;
+        for (let i = 0; i < maxTries; i++) {
+          await new Promise((r) => setTimeout(r, isVideo ? 5000 : 2000));
           const statusRes = await fetch(`https://graph.instagram.com/v21.0/${containerData.id}?fields=status_code&access_token=${env.IG_ACCESS_TOKEN}`);
           const statusData = await statusRes.json();
           if (statusData.status_code === "FINISHED") { ready = true; break; }
-          if (statusData.status_code === "ERROR") throw new Error("فشلت معالجة الفيديو");
+          if (statusData.status_code === "ERROR") throw new Error("فشلت معالجة الملف");
         }
-        if (!ready) throw new Error("استغرقت معالجة الفيديو وقت طويل");
+        if (!ready) throw new Error("استغرقت المعالجة وقت طويل");
       }
 
       const publishRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media_publish`, {
