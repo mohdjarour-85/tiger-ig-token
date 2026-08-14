@@ -5,3 +5,8 @@ compatibility_date = "2024-09-23"
 [[r2_buckets]]
 binding = "IMAGES"
 bucket_name = "tiger-ig-images"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "tiger-ig-schedule"
+database_id = "e38a9f6f-548a-4f93-af82-1e76ec6e3a47"
