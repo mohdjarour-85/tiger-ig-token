@@ -243,9 +243,7 @@ if (url.pathname === "/publish") {
 
         const ext = file.name.split(".").pop() || "jpg";
         const key = `posts/${Date.now()}.${ext}`;
-        await env.IMAGES.put(key, file.stream(), {
-          httpMetadata: { contentType: file.type },
-        });
+        await env.IMAGES.put(key, file.stream(), { httpMetadata: { contentType: file.type } });
 
         const imageUrl = `https://${url.hostname}/img/${key}`;
 
@@ -269,6 +267,50 @@ if (url.pathname === "/publish") {
           return new Response(JSON.stringify({ success: false, error: "إنشاء الحاوية", detail: containerData }), { headers: { "content-type": "application/json" } });
         }
 
+        return new Response(JSON.stringify({ success: true, containerId: containerData.id, isVideo: isVideo }), { headers: { "content-type": "application/json" } });
+      } catch (e) {
+        return new Response(JSON.stringify({ success: false, error: String(e) }), { headers: { "content-type": "application/json" } });
+      }
+    }
+
+    if (url.pathname === "/publish-status") {
+      const id = url.searchParams.get("id");
+      if (!env.IG_ACCESS_TOKEN || !id) {
+        return new Response(JSON.stringify({ status: "ERROR" }), { headers: { "content-type": "application/json" } });
+      }
+      try {
+        const statusRes = await fetch(`https://graph.instagram.com/v21.0/${id}?fields=status_code&access_token=${env.IG_ACCESS_TOKEN}`);
+        const statusData = await statusRes.json();
+        return new Response(JSON.stringify({ status: statusData.status_code || "ERROR" }), { headers: { "content-type": "application/json" } });
+      } catch (e) {
+        return new Response(JSON.stringify({ status: "ERROR", error: String(e) }), { headers: { "content-type": "application/json" } });
+      }
+    }
+
+    if (url.pathname === "/finalize") {
+      const id = url.searchParams.get("id");
+      if (!env.IG_ACCESS_TOKEN || !id) {
+        return new Response(JSON.stringify({ success: false, error: "بيانات ناقصة" }), { headers: { "content-type": "application/json" } });
+      }
+      try {
+        const meRes = await fetch(`https://graph.instagram.com/me?fields=id&access_token=${env.IG_ACCESS_TOKEN}`);
+        const meData = await meRes.json();
+        if (!meData.id) {
+          return new Response(JSON.stringify({ success: false, error: "معرف الحساب", detail: meData }), { headers: { "content-type": "application/json" } });
+        }
+        const publishRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media_publish`, {
+          method: "POST",
+          body: new URLSearchParams({ creation_id: id, access_token: env.IG_ACCESS_TOKEN }),
+        });
+        const publishData = await publishRes.json();
+        if (!publishData.id) {
+          return new Response(JSON.stringify({ success: false, error: "النشر", detail: publishData }), { headers: { "content-type": "application/json" } });
+        }
+        return new Response(JSON.stringify({ success: true, postId: publishData.id }), { headers: { "content-type": "application/json" } });
+      } catch (e) {
+        return new Response(JSON.stringify({ success: false, error: String(e) }), { headers: { "content-type": "application/json" } });
+      }
+                              }
         if (isVideo) {
           let status = "IN_PROGRESS";
           let tries = 0;
