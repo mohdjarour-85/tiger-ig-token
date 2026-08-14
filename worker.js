@@ -152,33 +152,74 @@ if (url.pathname === "/publish") {
 }
     if (url.pathname === "/new") {
       return html(`
-        <h1>Tiger Event — نشر صورة جديدة</h1>
-        <form id="f">
-          <p>اختر الصورة:</p>
-          <input type="file" id="img" accept="image/*,video/*" required>
-          <p>الكابشن:</p>
-          <textarea id="cap" placeholder="اكتب الكابشن هنا..." style="min-height:120px;"></textarea>
-          <button type="submit" class="btn" style="border:none;cursor:pointer;">نشر الآن</button>
-        </form>
+        <h1>Tiger Event — نشر جديد</h1>
+        <p>قالب كابشن جاهز:</p>
+        <select id="preset" style="width:100%;padding:10px;border-radius:8px;">
+          <option value="">— اختر قالب (اختياري) —</option>
+          <option value="wedding">أعراس</option>
+          <option value="event">فعاليات وتنظيم</option>
+          <option value="production">برودكشن</option>
+          <option value="conference">مؤتمرات</option>
+        </select>
+        <p>اختر الصورة أو الفيديو:</p>
+        <input type="file" id="img" accept="image/*,video/*" required>
+        <p>الكابشن:</p>
+        <textarea id="cap" placeholder="اكتب الكابشن هنا أو اختر قالب جاهز..." style="min-height:140px;"></textarea>
+        <button type="button" id="publishBtn" class="btn" style="border:none;cursor:pointer;">نشر الآن</button>
         <div id="status" style="margin-top:16px;"></div>
         <script>
-          document.getElementById('f').addEventListener('submit', async (e) => {
-            e.preventDefault();
+          const presets = {
+            wedding: "✨ عروسين اليوم مميزين ونحرص نخلي كل تفصيلة بمناسبتكم بأحلى صورة 💍\\n\\n📍 الكويت\\n📩 تواصل معنا الحين\\n\\n#TigerEvent #أعراس #تنظيم_أعراس #الكويت",
+            event: "🎉 فعالية جديدة ننظمها بكل التفاصيل من الألف للياء\\n\\n📍 الكويت\\n📩 تواصل معنا الحين\\n\\n#TigerEvent #تنظيم_فعاليات #الكويت #event_management",
+            production: "🎬 خلف الكواليس... فريقنا شغال على إنتاج يليق بالمناسبة\\n\\n📍 الكويت\\n📩 تواصل معنا الحين\\n\\n#TigerEvent #برودكشن #production #الكويت",
+            conference: "🎤 مؤتمر ناجح يبدأ بتنظيم احترافي، وهذا شغلنا بالضبط\\n\\n📍 الكويت\\n📩 تواصل معنا الحين\\n\\n#TigerEvent #مؤتمرات #conferences #الكويت"
+          };
+          document.getElementById('preset').addEventListener('change', function(){
+            const val = presets[this.value];
+            if (val) document.getElementById('cap').value = val;
+          });
+
+          async function pollStatus(containerId){
+            const statusDiv = document.getElementById('status');
+            let tries = 0;
+            while (tries < 40) {
+              await new Promise(function(r){ setTimeout(r, 3000); });
+              const res = await fetch('/publish-status?id=' + containerId);
+              const data = await res.json();
+              if (data.status === 'FINISHED') return;
+              if (data.status === 'ERROR') throw new Error('فشلت معالجة الفيديو');
+              statusDiv.innerHTML = '<p>⏳ جاري معالجة الفيديو...</p>';
+              tries++;
+            }
+            throw new Error('استغرقت المعالجة وقت طويل');
+          }
+
+          document.getElementById('publishBtn').addEventListener('click', async function(){
             const fileInput = document.getElementById('img');
             const caption = document.getElementById('cap').value;
             const statusDiv = document.getElementById('status');
             if (!fileInput.files[0]) return;
-            statusDiv.innerHTML = '<p>⏳ جاري الرفع والنشر...</p>';
+            statusDiv.innerHTML = '<p>⏳ جاري الرفع...</p>';
             const formData = new FormData();
             formData.append('image', fileInput.files[0]);
             formData.append('caption', caption);
             try {
               const res = await fetch('/upload-and-publish', { method: 'POST', body: formData });
               const data = await res.json();
-              if (data.success) {
-                statusDiv.innerHTML = '<h1>✅ تم النشر بنجاح</h1><p>Post ID: ' + data.postId + '</p>';
-              } else {
+              if (!data.success) {
                 statusDiv.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+                return;
+              }
+              if (data.isVideo) {
+                await pollStatus(data.containerId);
+              }
+              statusDiv.innerHTML = '<p>⏳ جاري النشر النهائي...</p>';
+              const finalRes = await fetch('/finalize?id=' + data.containerId);
+              const finalData = await finalRes.json();
+              if (finalData.success) {
+                statusDiv.innerHTML = '<h1>✅ تم النشر بنجاح</h1><p>Post ID: ' + finalData.postId + '</p>';
+              } else {
+                statusDiv.innerHTML = '<pre>' + JSON.stringify(finalData, null, 2) + '</pre>';
               }
             } catch (err) {
               statusDiv.innerHTML = '<pre>خطأ: ' + err + '</pre>';
