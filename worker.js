@@ -155,7 +155,7 @@ if (url.pathname === "/publish") {
         <h1>Tiger Event — نشر صورة جديدة</h1>
         <form id="f">
           <p>اختر الصورة:</p>
-          <input type="file" id="img" accept="image/*" required>
+          <input type="file" id="img" accept="image/*,video/*" required>
           <p>الكابشن:</p>
           <textarea id="cap" placeholder="اكتب الكابشن هنا..." style="min-height:120px;"></textarea>
           <button type="submit" class="btn" style="border:none;cursor:pointer;">نشر الآن</button>
@@ -214,13 +214,33 @@ if (url.pathname === "/publish") {
           return new Response(JSON.stringify({ success: false, error: "معرف الحساب", detail: meData }), { headers: { "content-type": "application/json" } });
         }
 
+        const isVideo = file.type.startsWith("video/");
+        const containerParams = isVideo
+          ? { media_type: "REELS", video_url: imageUrl, caption: caption, access_token: env.IG_ACCESS_TOKEN }
+          : { image_url: imageUrl, caption: caption, access_token: env.IG_ACCESS_TOKEN };
+
         const containerRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media`, {
           method: "POST",
-          body: new URLSearchParams({ image_url: imageUrl, caption: caption, access_token: env.IG_ACCESS_TOKEN }),
+          body: new URLSearchParams(containerParams),
         });
         const containerData = await containerRes.json();
         if (!containerData.id) {
           return new Response(JSON.stringify({ success: false, error: "إنشاء الحاوية", detail: containerData }), { headers: { "content-type": "application/json" } });
+        }
+
+        if (isVideo) {
+          let status = "IN_PROGRESS";
+          let tries = 0;
+          while (status === "IN_PROGRESS" && tries < 30) {
+            await new Promise((r) => setTimeout(r, 3000));
+            const statusRes = await fetch(`https://graph.instagram.com/v21.0/${containerData.id}?fields=status_code&access_token=${env.IG_ACCESS_TOKEN}`);
+            const statusData = await statusRes.json();
+            status = statusData.status_code;
+            tries++;
+          }
+          if (status !== "FINISHED") {
+            return new Response(JSON.stringify({ success: false, error: "معالجة الفيديو فشلت أو استغرقت وقت طويل", status }), { headers: { "content-type": "application/json" } });
+          }
         }
 
         const publishRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media_publish`, {
