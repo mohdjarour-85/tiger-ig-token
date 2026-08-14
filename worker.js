@@ -103,7 +103,53 @@ export default {
         return html(errorBlock("خطأ غير متوقع", String(e)));
       }
     }
+if (url.pathname === "/publish") {
+      if (!env.IG_ACCESS_TOKEN) {
+        return html(errorBlock("التوكن ناقص", "أضف IG_ACCESS_TOKEN بإعدادات الورك أول."));
+      }
+      const imageUrl = url.searchParams.get("image_url");
+      const caption = url.searchParams.get("caption") || "";
+      if (!imageUrl) {
+        return html(errorBlock("رابط الصورة ناقص", "استخدم ?image_url=...&caption=..."));
+      }
 
+      try {
+        const meRes = await fetch(`https://graph.instagram.com/me?fields=id&access_token=${env.IG_ACCESS_TOKEN}`);
+        const meData = await meRes.json();
+        if (!meData.id) {
+          return html(errorBlock("ما قدرنا نجيب معرف الحساب", JSON.stringify(meData, null, 2)));
+        }
+
+        const containerRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media`, {
+          method: "POST",
+          body: new URLSearchParams({
+            image_url: imageUrl,
+            caption: caption,
+            access_token: env.IG_ACCESS_TOKEN,
+          }),
+        });
+        const containerData = await containerRes.json();
+        if (!containerData.id) {
+          return html(errorBlock("فشل إنشاء الحاوية", JSON.stringify(containerData, null, 2)));
+        }
+
+        const publishRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media_publish`, {
+          method: "POST",
+          body: new URLSearchParams({
+            creation_id: containerData.id,
+            access_token: env.IG_ACCESS_TOKEN,
+          }),
+        });
+        const publishData = await publishRes.json();
+        if (!publishData.id) {
+          return html(errorBlock("فشل النشر", JSON.stringify(publishData, null, 2)));
+        }
+
+        return html(`<h1>✅ تم النشر بنجاح</h1><p>Post ID: ${publishData.id}</p>`);
+      } catch (e) {
+        return html(errorBlock("خطأ غير متوقع بالنشر", String(e)));
+      }
+}
     return html(errorBlock("الصفحة مو موجودة", "جرب /start"));
   },
 };
