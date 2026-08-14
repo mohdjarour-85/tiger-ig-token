@@ -103,7 +103,8 @@ export default {
         return html(errorBlock("خطأ غير متوقع", String(e)));
       }
     }
-if (url.pathname === "/publish") {
+
+    if (url.pathname === "/publish") {
       if (!env.IG_ACCESS_TOKEN) {
         return html(errorBlock("التوكن ناقص", "أضف IG_ACCESS_TOKEN بإعدادات الورك أول."));
       }
@@ -149,7 +150,8 @@ if (url.pathname === "/publish") {
       } catch (e) {
         return html(errorBlock("خطأ غير متوقع بالنشر", String(e)));
       }
-}
+    }
+
     if (url.pathname === "/new") {
       return html(`
         <h1>Tiger Event — نشر جديد</h1>
@@ -195,17 +197,17 @@ if (url.pathname === "/publish") {
           }
 
           document.getElementById('publishBtn').addEventListener('click', async function(){
-  const btn = this;
-  if (btn.disabled) return;
-  const fileInput = document.getElementById('img');
-  const caption = document.getElementById('cap');
-  const statusDiv = document.getElementById('status');
-  if (!fileInput.files[0]) return;
-  btn.disabled = true;
+            const btn = this;
+            if (btn.disabled) return;
+            const fileInput = document.getElementById('img');
+            const caption = document.getElementById('cap');
+            const statusDiv = document.getElementById('status');
+            if (!fileInput.files[0]) return;
+            btn.disabled = true;
             statusDiv.innerHTML = '<p>⏳ جاري الرفع...</p>';
             const formData = new FormData();
             formData.append('image', fileInput.files[0]);
-            formData.append('caption', caption);
+            formData.append('caption', caption.value);
             try {
               const res = await fetch('/upload-and-publish', { method: 'POST', body: formData });
               const data = await res.json();
@@ -224,11 +226,11 @@ if (url.pathname === "/publish") {
               } else {
                 statusDiv.innerHTML = '<pre>' + JSON.stringify(finalData, null, 2) + '</pre>';
               }
-                } catch (err) {
-      statusDiv.innerHTML = '<pre>خطأ...
-       } finally {
-      btn.disabled = false;
-    }
+            } catch (err) {
+              statusDiv.innerHTML = '<pre>خطأ: ' + String(err) + '</pre>';
+            } finally {
+              btn.disabled = false;
+            }
           });
         </script>
       `);
@@ -315,9 +317,7 @@ if (url.pathname === "/publish") {
       } catch (e) {
         return new Response(JSON.stringify({ success: false, error: String(e) }), { headers: { "content-type": "application/json" } });
       }
-                              }
-        
-    
+    }
 
     if (url.pathname.startsWith("/img/")) {
       const key = url.pathname.replace("/img/", "");
