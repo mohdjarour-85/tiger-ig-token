@@ -167,9 +167,7 @@ if (url.pathname === "/publish") {
         <textarea id="cap" placeholder="اكتب الكابشن هنا أو اختر قالب جاهز..." style="min-height:140px;"></textarea>
         <button type="button" id="publishBtn" class="btn" style="border:none;cursor:pointer;">نشر الآن</button>
         <div id="status" style="margin-top:16px;"></div>
-        <script>window.onerror = function(msg, url, line) {
-  document.getElementById('status').innerHTML = '<pre style="color:red">خطأ: ' + msg + ' سطر: ' + line + '</pre>';
-};
+        <script>
           const presets = {
             wedding: "✨ عروسين اليوم مميزين ونحرص نخلي كل تفصيلة بمناسبتكم بأحلى صورة 💍\\n\\n📍 الكويت\\n📩 تواصل معنا الحين\\n\\n#TigerEvent #أعراس #تنظيم_أعراس #الكويت",
             event: "🎉 فعالية جديدة ننظمها بكل التفاصيل من الألف للياء\\n\\n📍 الكويت\\n📩 تواصل معنا الحين\\n\\n#TigerEvent #تنظيم_فعاليات #الكويت #event_management",
