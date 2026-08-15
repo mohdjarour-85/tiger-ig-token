@@ -5,10 +5,12 @@
  * والحصول على Access Token طويل الأمد لحساب انستقرام tiger4event.
  *
  * المتغيرات المطلوبة (Settings → Variables and Secrets بلوحة Cloudflare):
- *   IG_APP_ID        -> رقم Instagram app ID (من صفحة API setup with Instagram login)
- *   IG_APP_SECRET     -> Instagram app secret (نفس الصفحة) — خليه Secret مو Text عادي
- *   IG_REDIRECT_URI   -> رابط هذا الورك نفسه + /callback
- *                        مثال: https://tiger-ig-token.mohdjarour.workers.dev/callback
+ *   IG_APP_ID           -> رقم Instagram app ID (من صفحة API setup with Instagram login)
+ *   IG_APP_SECRET       -> Instagram app secret (نفس الصفحة) — خليه Secret مو Text عادي
+ *   IG_REDIRECT_URI     -> رابط هذا الورك نفسه + /callback
+ *   R2_ACCESS_KEY_ID    -> من R2 API Token (Object Read & Write)
+ *   R2_SECRET_ACCESS_KEY-> من R2 API Token
+ *   R2_ACCOUNT_ID       -> Account ID من لوحة Cloudflare
  *
  * الاستخدام:
  *   1) افتح  https://<اسم-الورك>.workers.dev/start   من المتصفح وسجل دخول بحساب tiger4event
@@ -16,7 +18,10 @@
  *   3) الصفحة تسوي التحويل للتوكن الطويل (60 يوم) وتعرضه لك جاهز للنسخ والحفظ
  */
 
+import { AwsClient } from "aws4fetch";
+
 const WORKER_HOST = "tiger-ig-token2.mohdjarour.workers.dev";
+const R2_BUCKET_NAME = "tiger-ig-images";
 
 export default {
   async fetch(request, env) {
@@ -276,18 +281,47 @@ export default {
             const dtLocal = document.getElementById('dt').value;
             const dt = dtLocal ? new Date(dtLocal).toISOString().slice(0, 16) : '';
             const statusDiv = document.getElementById('status');
-            if (!fileInput.files[0] || !dt) {
+            const file = fileInput.files[0];
+            if (!file || !dt) {
               statusDiv.innerHTML = '<p>لازم تختار ملف ووقت النشر</p>';
               return;
             }
             btn.disabled = true;
-            statusDiv.innerHTML = '<p>⏳ جاري الحفظ...</p>';
-            const formData = new FormData();
-            formData.append('image', fileInput.files[0]);
-            formData.append('caption', caption);
-            formData.append('scheduled_time', dt);
             try {
-              const res = await fetch('/save-schedule', { method: 'POST', body: formData });
+              statusDiv.innerHTML = '<p>⏳ جاري تجهيز الرفع...</p>';
+              const urlRes = await fetch('/get-upload-url', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename: file.name, contentType: file.type })
+              });
+              const urlData = await urlRes.json();
+              if (!urlData.success) {
+                statusDiv.innerHTML = '<pre>' + JSON.stringify(urlData, null, 2) + '</pre>';
+                return;
+              }
+
+              statusDiv.innerHTML = '<p>⏳ جاري رفع الملف مباشرة...</p>';
+              const putRes = await fetch(urlData.uploadUrl, {
+                method: 'PUT',
+                headers: { 'Content-Type': file.type },
+                body: file
+              });
+              if (!putRes.ok) {
+                statusDiv.innerHTML = '<p>فشل الرفع (كود ' + putRes.status + ')</p>';
+                return;
+              }
+
+              statusDiv.innerHTML = '<p>⏳ جاري الحفظ...</p>';
+              const res = await fetch('/save-schedule', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  key: urlData.key,
+                  media_type: file.type.startsWith('video/') ? 'video' : 'image',
+                  caption: caption,
+                  scheduled_time: dt
+                })
+              });
               const data = await res.json();
               if (data.success) {
                 statusDiv.innerHTML = '<h1>✅ تم جدولة البوست</h1><p>هينشر تلقائيًا بالوقت المحدد</p>';
@@ -304,24 +338,43 @@ export default {
       `);
     }
 
-    if (url.pathname === "/save-schedule") {
-      if (!env.IMAGES || !env.DB) {
-        return new Response(JSON.stringify({ success: false, error: "الإعداد ناقص (R2 أو DB)" }), { headers: { "content-type": "application/json" } });
+    if (url.pathname === "/get-upload-url" && request.method === "POST") {
+      if (!env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY || !env.R2_ACCOUNT_ID) {
+        return new Response(JSON.stringify({ success: false, error: "إعداد الرفع المباشر ناقص (R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_ACCOUNT_ID)" }), { headers: { "content-type": "application/json" } });
       }
       try {
-        const formData = await request.formData();
-        const file = formData.get("image");
-        const caption = formData.get("caption") || "";
-        const scheduledTime = formData.get("scheduled_time");
-        if (!file || !scheduledTime) {
+        const { filename, contentType } = await request.json();
+        const ext = (filename || "file").split(".").pop() || "bin";
+        const key = `posts/${Date.now()}.${ext}`;
+        const client = new AwsClient({
+          accessKeyId: env.R2_ACCESS_KEY_ID,
+          secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+        });
+        const endpoint = `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${R2_BUCKET_NAME}/${key}`;
+        const signed = await client.sign(endpoint, {
+          method: "PUT",
+          headers: { "Content-Type": contentType || "application/octet-stream" },
+          aws: { signQuery: true },
+        });
+        return new Response(JSON.stringify({ success: true, uploadUrl: signed.url, key }), { headers: { "content-type": "application/json" } });
+      } catch (e) {
+        return new Response(JSON.stringify({ success: false, error: String(e) }), { headers: { "content-type": "application/json" } });
+      }
+    }
+
+    if (url.pathname === "/save-schedule") {
+      if (!env.DB) {
+        return new Response(JSON.stringify({ success: false, error: "الإعداد ناقص (DB)" }), { headers: { "content-type": "application/json" } });
+      }
+      try {
+        const body = await request.json();
+        const key = body.key;
+        const mediaType = body.media_type || "image";
+        const caption = body.caption || "";
+        const scheduledTime = body.scheduled_time;
+        if (!key || !scheduledTime) {
           return new Response(JSON.stringify({ success: false, error: "بيانات ناقصة" }), { headers: { "content-type": "application/json" } });
         }
-
-        const ext = file.name.split(".").pop() || "jpg";
-        const key = `posts/${Date.now()}.${ext}`;
-        await env.IMAGES.put(key, file.stream(), { httpMetadata: { contentType: file.type } });
-
-        const mediaType = file.type.startsWith("video/") ? "video" : "image";
 
         await env.DB.prepare(
           "INSERT INTO scheduled_posts (media_key, media_type, caption, scheduled_time) VALUES (?, ?, ?, ?)"
