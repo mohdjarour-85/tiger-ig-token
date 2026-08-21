@@ -571,11 +571,10 @@ async function autoPublishNext(env) {
   // الفئة تتحدد من عدد الأيام منذ بداية التقويم — بدون أي جدول تتبع منفصل
   const dayCount = Math.floor(Date.now() / 86400000);
   const category = CATEGORIES[dayCount % CATEGORIES.length];
-  const mediaKey = `templates-${category}.jpg`;
-
-  const obj = await env.IMAGES.head(mediaKey);
-  if (!obj) throw new Error(`الصورة ${mediaKey} مو موجودة بـ R2 — ارفعها أول بهالاسم بالضبط`);
-
+  const listed = await env.IMAGES.list({ limit: 100 });
+  const match = listed.objects.find((o) => o.key.toLowerCase().includes(category.toLowerCase()));
+  if (!match) throw new Error(`ما لقيت صورة تحتوي كلمة "${category}" بالاسم — تأكد من رفع صورة القالب لهالفئة`);
+  const mediaKey = match.key;
   const caption = (await generateCaption(env, category)) + "\n\n[auto]";
   const mediaUrl = `https://${WORKER_HOST}/img/${mediaKey}`;
 
