@@ -575,6 +575,18 @@ async function autoPublishNext(env) {
   const match = listed.objects.find((o) => o.key.toLowerCase().includes(category.toLowerCase()));
   if (!match) throw new Error(`ما لقيت صورة تحتوي كلمة "${category}" بالاسم — تأكد من رفع صورة القالب لهالفئة`);
   const mediaKey = match.key;
+  // حماية من التكرار: ما ينشر إذا فيه بوست تلقائي بنفس الفئة خلال آخر 20 ساعة
+    if (env.DB) {
+      const recent = await env.DB.prepare(
+        "SELECT scheduled_time FROM scheduled_posts WHERE media_key = ? AND status = 'posted' ORDER BY id DESC LIMIT 1"
+      ).bind(mediaKey).first();
+      if (recent) {
+        const lastTime = new Date(recent.scheduled_time + ":00Z");
+        if (Date.now() - lastTime.getTime() < 20 * 3600 * 1000) {
+          throw new Error("تم النشر بهالفئة مؤخرًا (خلال آخر 20 ساعة) — تم تجاهل الطلب لمنع التكرار");
+        }
+      }
+    }
   const caption = (await generateCaption(env, category)) + "\n\n[auto]";
   const mediaUrl = `https://${WORKER_HOST}/img/${mediaKey}`;
 
