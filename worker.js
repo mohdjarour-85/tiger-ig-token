@@ -11,17 +11,28 @@
  *   R2_ACCESS_KEY_ID    -> من R2 API Token (Object Read & Write)
  *   R2_SECRET_ACCESS_KEY-> من R2 API Token
  *   R2_ACCOUNT_ID       -> Account ID من لوحة Cloudflare
+ *   ANTHROPIC_API_KEY   -> مفتاح Claude API (لتوليد الكابشن تلقائيًا)
  *
- * الاستخدام:
- *   1) افتح  https://<اسم-الورك>.workers.dev/start   من المتصفح وسجل دخول بحساب tiger4event
- *   2) بعد الموافقة، انستقرام يرجعك لـ /callback تلقائيًا
- *   3) الصفحة تسوي التحويل للتوكن الطويل (60 يوم) وتعرضه لك جاهز للنسخ والحفظ
+ * النشر التلقائي (بدون تدخل يدوي):
+ *   ارفع 4 صور جاهزة لـ R2 باسم: templates-wedding.jpg / templates-event.jpg /
+ *   templates-production.jpg / templates-conference.jpg
+ *   الكرون الثاني بـ wrangler.toml (crons array) ينشر تلقائيًا 3 مرات بالأسبوع،
+ *   يختار الفئة بالتناوب حسب التاريخ (بدون جدول قاعدة بيانات إضافي)، ويولّد
+ *   الكابشن عبر Claude، وينشر مباشرة.
  */
 
 import { AwsClient } from "aws4fetch";
 
 const WORKER_HOST = "tiger-ig-token2.mohdjarour.workers.dev";
 const R2_BUCKET_NAME = "tiger-ig-images";
+
+const CATEGORIES = ["wedding", "event", "production", "conference"];
+const CATEGORY_LABELS_AR = {
+  wedding: "الأعراس",
+  event: "الفعاليات والتنظيم",
+  production: "البرودكشن",
+  conference: "المؤتمرات",
+};
 
 export default {
   async fetch(request, env) {
@@ -469,6 +480,16 @@ export default {
       }
     }
 
+    // نشر تلقائي فوري لأول مرة تجربة (يفتح من المتصفح بدون انتظار الكرون)
+    if (url.pathname === "/auto-test") {
+      try {
+        const result = await autoPublishNext(env);
+        return html(`<h1>✅ تم النشر التلقائي</h1><pre>${escapeHtml(JSON.stringify(result, null, 2))}</pre>`);
+      } catch (e) {
+        return html(errorBlock("فشل النشر التلقائي", String(e)));
+      }
+    }
+
     if (url.pathname.startsWith("/img/")) {
       const key = url.pathname.replace("/img/", "");
       const obj = await env.IMAGES.get(key);
@@ -479,9 +500,109 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
+    // الكرون كل 15 دقيقة: ينشر البوستات المجدولة يدويًا اللي حان وقتها
     ctx.waitUntil(runScheduledPosts(env));
+    // نفس الاستدعاء يفحص أيضًا هل حان وقت النشر التلقائي الأسبوعي (بدون كرون ثاني منفصل)
+    ctx.waitUntil(maybeAutoPublish(env));
   },
 };
+
+// ينشر تلقائيًا 3 مرات بالأسبوع (أحد/ثلاثاء/خميس الساعة 6 مساءً بتوقيت الكويت تقريبًا)
+// بدون أي جدول تتبع بقاعدة البيانات — الفئة والتوقيت يتحددون من التاريخ نفسه
+async function maybeAutoPublish(env) {
+  const now = new Date();
+  const kuwaitHour = (now.getUTCHours() + 3) % 24; // تحويل تقريبي لتوقيت الكويت (UTC+3)
+  const day = now.getUTCDay(); // 0=أحد, 2=ثلاثاء, 4=خميس
+  const isAutoSlot = [0, 2, 4].includes(day) && kuwaitHour === 18;
+  if (!isAutoSlot) return;
+
+  // منع التكرار: ما ينشر إلا مرة وحدة خلال نفس الساعة (يفحص آخر بوست تلقائي بالسجل)
+  if (env.DB) {
+    const lastAuto = await env.DB.prepare(
+      "SELECT scheduled_time FROM scheduled_posts WHERE caption LIKE '%[auto]%' ORDER BY id DESC LIMIT 1"
+    ).first();
+    if (lastAuto) {
+      const lastTime = new Date(lastAuto.scheduled_time + ":00Z");
+      if (now.getTime() - lastTime.getTime() < 6 * 3600 * 1000) return; // نشر أخير أقل من 6 ساعات
+    }
+  }
+
+  try {
+    await autoPublishNext(env);
+  } catch (e) {
+    // الخطأ يتسجل بجدول scheduled_posts نفسه داخل autoPublishNext عند الفشل بعد إنشاء الحاوية،
+    // وأي خطأ قبل ذلك (مثل مفتاح ناقص) يُتجاهل بصمت هنا عشان ما يوقف باقي الكرون
+  }
+}
+
+async function generateCaption(env, category) {
+  const label = CATEGORY_LABELS_AR[category];
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 300,
+      messages: [
+        {
+          role: "user",
+          content:
+            `اكتب كابشن قصير لبوست انستقرام لشركة فعاليات كويتية اسمها Tiger Event، عن مجال "${label}". ` +
+            `أسلوب عربي كويتي دافئ واحترافي، مع إيموجي مناسب، وسطر موقع (الكويت)، ودعوة للتواصل، ` +
+            `وهاشتاقات مناسبة بالنهاية (منها #TigerEvent). لا تكرر نفس صياغة كل مرة. رد بالكابشن فقط بدون أي مقدمة.`,
+        },
+      ],
+    }),
+  });
+  const data = await res.json();
+  if (!data.content || !data.content[0]) throw new Error("فشل توليد الكابشن: " + JSON.stringify(data));
+  return data.content[0].text.trim();
+}
+
+async function autoPublishNext(env) {
+  if (!env.DB || !env.IMAGES || !env.IG_ACCESS_TOKEN || !env.ANTHROPIC_API_KEY) {
+    throw new Error("إعداد ناقص (DB / IMAGES / IG_ACCESS_TOKEN / ANTHROPIC_API_KEY)");
+  }
+
+  // الفئة تتحدد من عدد الأيام منذ بداية التقويم — بدون أي جدول تتبع منفصل
+  const dayCount = Math.floor(Date.now() / 86400000);
+  const category = CATEGORIES[dayCount % CATEGORIES.length];
+  const mediaKey = `templates-${category}.jpg`;
+
+  const obj = await env.IMAGES.head(mediaKey);
+  if (!obj) throw new Error(`الصورة ${mediaKey} مو موجودة بـ R2 — ارفعها أول بهالاسم بالضبط`);
+
+  const caption = (await generateCaption(env, category)) + "\n\n[auto]";
+  const mediaUrl = `https://${WORKER_HOST}/img/${mediaKey}`;
+
+  const meRes = await fetch(`https://graph.instagram.com/me?fields=id&access_token=${env.IG_ACCESS_TOKEN}`);
+  const meData = await meRes.json();
+  if (!meData.id) throw new Error("معرف الحساب: " + JSON.stringify(meData));
+
+  const containerRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media`, {
+    method: "POST",
+    body: new URLSearchParams({ image_url: mediaUrl, caption, access_token: env.IG_ACCESS_TOKEN }),
+  });
+  const containerData = await containerRes.json();
+  if (!containerData.id) throw new Error("إنشاء الحاوية: " + JSON.stringify(containerData));
+
+  const publishRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media_publish`, {
+    method: "POST",
+    body: new URLSearchParams({ creation_id: containerData.id, access_token: env.IG_ACCESS_TOKEN }),
+  });
+  const publishData = await publishRes.json();
+  if (!publishData.id) throw new Error("النشر: " + JSON.stringify(publishData));
+
+  await env.DB.prepare(
+    "INSERT INTO scheduled_posts (media_key, media_type, caption, scheduled_time, status, post_id) VALUES (?, 'image', ?, ?, 'posted', ?)"
+  ).bind(mediaKey, caption, new Date().toISOString().slice(0, 16), publishData.id).run();
+
+  return { category, caption, mediaKey, postId: publishData.id };
+}
 
 async function runScheduledPosts(env) {
   if (!env.DB || !env.IMAGES || !env.IG_ACCESS_TOKEN) return;
