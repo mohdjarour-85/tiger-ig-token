@@ -16,9 +16,8 @@
  * النشر التلقائي (بدون تدخل يدوي):
  *   ارفع 4 صور جاهزة لـ R2 باسم: templates-wedding.jpg / templates-event.jpg /
  *   templates-production.jpg / templates-conference.jpg
- *   الكرون الثاني بـ wrangler.toml (crons array) ينشر تلقائيًا 3 مرات بالأسبوع،
- *   يختار الفئة بالتناوب حسب التاريخ (بدون جدول قاعدة بيانات إضافي)، ويولّد
- *   الكابشن عبر Claude، وينشر مباشرة.
+ *   الكرون (كل 15 دقيقة) ينشر تلقائيًا بوست واحد كل أسبوعين، يوم الأحد الساعة
+ *   6 مساءً بتوقيت الكويت، يختار الفئة بالتناوب، ويولّد الكابشن عبر Claude.
  */
 
 import { AwsClient } from "aws4fetch";
@@ -33,6 +32,16 @@ const CATEGORY_LABELS_AR = {
   production: "البرودكشن",
   conference: "المؤتمرات",
 };
+
+/* ------------------------- إعدادات النشر التلقائي -------------------------
+ * مجمّعة هنا بدل ما تكون أرقامًا مبعثرة داخل الدوال: تغيير الوتيرة صار سطرًا
+ * واحدًا. AUTO_MIN_GAP_DAYS خُلّي 13 مو 14 عن قصد — الفاصل يُقاس من وقت آخر
+ * نشر فعلي، فلو تأخر بوست بضع ساعات (خطأ مؤقت، توكن منتهي) كان الفاصل الكامل
+ * راح يزحف ويأجل النشر أسبوعًا كاملًا بلا داعٍ.
+ */
+const AUTO_PUBLISH_DAY = 0;      // 0 = الأحد (يوم الأسبوع بتوقيت UTC)
+const AUTO_PUBLISH_HOUR_KW = 18; // 6 مساءً بتوقيت الكويت
+const AUTO_MIN_GAP_DAYS = 13;    // أسبوعان تقريبًا بين كل بوست تلقائي
 
 export default {
   async fetch(request, env) {
@@ -480,13 +489,44 @@ export default {
       }
     }
 
-    // نشر تلقائي فوري لأول مرة تجربة (يفتح من المتصفح بدون انتظار الكرون)
+    // نشر تلقائي فوري للتجربة (يفتح من المتصفح بدون انتظار الكرون)
     if (url.pathname === "/auto-test") {
       try {
         const result = await autoPublishNext(env);
         return html(`<h1>✅ تم النشر التلقائي</h1><pre>${escapeHtml(JSON.stringify(result, null, 2))}</pre>`);
       } catch (e) {
         return html(errorBlock("فشل النشر التلقائي", String(e)));
+      }
+    }
+
+    // متى البوست التلقائي الجاي؟ صفحة قراءة فقط — بدونها الطريقة الوحيدة لمعرفة
+    // إن النظام شغال هي انتظار ظهور بوست على الحساب.
+    if (url.pathname === "/auto-status") {
+      if (!env.DB) return html(errorBlock("الإعداد ناقص", "DB مو مربوط."));
+      try {
+        const last = await env.DB.prepare(
+          "SELECT scheduled_time, caption FROM scheduled_posts WHERE caption LIKE '%[auto]%' ORDER BY id DESC LIMIT 1"
+        ).first();
+        const countRow = await env.DB.prepare(
+          "SELECT COUNT(*) AS n FROM scheduled_posts WHERE caption LIKE '%[auto]%'"
+        ).first();
+        const n = (countRow && countRow.n) || 0;
+        const nextCat = CATEGORIES[n % CATEGORIES.length];
+        const lastTxt = last ? last.scheduled_time : "ما فيه بوست تلقائي بعد";
+        const eligible = last
+          ? new Date(new Date(last.scheduled_time + ":00Z").getTime() + AUTO_MIN_GAP_DAYS * 86400000)
+          : new Date();
+        return html(`
+          <h1>حالة النشر التلقائي</h1>
+          <p>الوتيرة: بوست واحد كل أسبوعين — الأحد الساعة ${AUTO_PUBLISH_HOUR_KW}:00 بتوقيت الكويت.</p>
+          <p>عدد البوستات التلقائية حتى الآن: <b>${n}</b></p>
+          <p>آخر بوست تلقائي: <b>${escapeHtml(lastTxt)}</b> (UTC)</p>
+          <p>ما ينشر قبل: <b>${escapeHtml(eligible.toISOString().slice(0, 16))}</b> (UTC)، وأول أحد بعدها الساعة 6 مساءً.</p>
+          <p>الفئة الجاية بالدور: <b>${CATEGORY_LABELS_AR[nextCat]}</b></p>
+          <p class="note">للنشر فورًا بدون انتظار: <a href="/auto-test" style="color:#F8A337;">/auto-test</a></p>
+        `);
+      } catch (e) {
+        return html(errorBlock("خطأ", String(e)));
       }
     }
 
@@ -502,36 +542,38 @@ export default {
   async scheduled(event, env, ctx) {
     // الكرون كل 15 دقيقة: ينشر البوستات المجدولة يدويًا اللي حان وقتها
     ctx.waitUntil(runScheduledPosts(env));
-    // نفس الاستدعاء يفحص أيضًا هل حان وقت النشر التلقائي الأسبوعي (بدون كرون ثاني منفصل)
+    // ونفس الاستدعاء يفحص هل حان وقت البوست التلقائي (كل أسبوعين)
     ctx.waitUntil(maybeAutoPublish(env));
   },
 };
 
-// ينشر تلقائيًا 3 مرات بالأسبوع (أحد/ثلاثاء/خميس الساعة 6 مساءً بتوقيت الكويت تقريبًا)
-// بدون أي جدول تتبع بقاعدة البيانات — الفئة والتوقيت يتحددون من التاريخ نفسه
+/* ينشر تلقائيًا بوست واحد كل أسبوعين، الأحد الساعة 6 مساءً بتوقيت الكويت.
+ *
+ * الفاصل يُقاس من وقت آخر بوست تلقائي فعلي، لا من التقويم: لو فات موعد بسبب
+ * خطأ مؤقت أو توكن منتهي، ينشر بأول موعد جاي بدل ما ينتظر دورة كاملة ثانية.
+ * وهذا الفحص نفسه هو اللي يمنع التكرار — الكرون يشتغل كل 15 دقيقة فيتحقق شرط
+ * الساعة أربع مرات، لكن أول نشر ناجح يقفل الباب على الثلاثة الباقية.
+ */
 async function maybeAutoPublish(env) {
   const now = new Date();
-  const kuwaitHour = (now.getUTCHours() + 3) % 24; // تحويل تقريبي لتوقيت الكويت (UTC+3)
-  const day = now.getUTCDay(); // 0=أحد, 2=ثلاثاء, 4=خميس
-  const isAutoSlot = [0, 2, 4].includes(day) && kuwaitHour === 18;
+  const kuwaitHour = (now.getUTCHours() + 3) % 24; // الكويت = UTC+3
+  const isAutoSlot = now.getUTCDay() === AUTO_PUBLISH_DAY && kuwaitHour === AUTO_PUBLISH_HOUR_KW;
   if (!isAutoSlot) return;
 
-  // منع التكرار: ما ينشر إلا مرة وحدة خلال نفس الساعة (يفحص آخر بوست تلقائي بالسجل)
   if (env.DB) {
     const lastAuto = await env.DB.prepare(
       "SELECT scheduled_time FROM scheduled_posts WHERE caption LIKE '%[auto]%' ORDER BY id DESC LIMIT 1"
     ).first();
     if (lastAuto) {
       const lastTime = new Date(lastAuto.scheduled_time + ":00Z");
-      if (now.getTime() - lastTime.getTime() < 6 * 3600 * 1000) return; // نشر أخير أقل من 6 ساعات
+      if (now.getTime() - lastTime.getTime() < AUTO_MIN_GAP_DAYS * 24 * 3600 * 1000) return;
     }
   }
 
   try {
     await autoPublishNext(env);
   } catch (e) {
-    // الخطأ يتسجل بجدول scheduled_posts نفسه داخل autoPublishNext عند الفشل بعد إنشاء الحاوية،
-    // وأي خطأ قبل ذلك (مثل مفتاح ناقص) يُتجاهل بصمت هنا عشان ما يوقف باقي الكرون
+    // أي خطأ هنا (مفتاح ناقص، صورة قالب مفقودة) ما يوقف باقي الكرون
   }
 }
 
@@ -568,25 +610,26 @@ async function autoPublishNext(env) {
     throw new Error("إعداد ناقص (DB / IMAGES / IG_ACCESS_TOKEN / ANTHROPIC_API_KEY)");
   }
 
-  // الفئة تتحدد من عدد الأيام منذ بداية التقويم — بدون أي جدول تتبع منفصل
-  const dayCount = Math.floor(Date.now() / 86400000);
-  const category = CATEGORIES[dayCount % CATEGORIES.length];
+  /* الفئة تتحدد بعدد البوستات التلقائية السابقة، لا برقم اليوم.
+     الطريقة القديمة كانت (رقم اليوم % 4)، وهي تشتغل مع النشر ثلاث مرات بالأسبوع
+     لكنها تنهار مع فاصل 14 يوم: 14 % 4 = 2، فتتناوب الفئات بين اثنتين فقط
+     وتُهمل الاثنتين الباقيتين للأبد. العدّاد يضمن دورة كاملة على الأربع. */
+  let autoCount = 0;
+  const countRow = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM scheduled_posts WHERE caption LIKE '%[auto]%'"
+  ).first();
+  autoCount = (countRow && countRow.n) || 0;
+  const category = CATEGORIES[autoCount % CATEGORIES.length];
+
   const listed = await env.IMAGES.list({ limit: 100 });
   const match = listed.objects.find((o) => o.key.toLowerCase().includes(category.toLowerCase()));
   if (!match) throw new Error(`ما لقيت صورة تحتوي كلمة "${category}" بالاسم — تأكد من رفع صورة القالب لهالفئة`);
   const mediaKey = match.key;
-  // حماية من التكرار: ما ينشر إذا فيه بوست تلقائي بنفس الفئة خلال آخر 20 ساعة
-    if (env.DB) {
-      const recent = await env.DB.prepare(
-        "SELECT scheduled_time FROM scheduled_posts WHERE media_key = ? AND status = 'posted' ORDER BY id DESC LIMIT 1"
-      ).bind(mediaKey).first();
-      if (recent) {
-        const lastTime = new Date(recent.scheduled_time + ":00Z");
-        if (Date.now() - lastTime.getTime() < 20 * 3600 * 1000) {
-          throw new Error("تم النشر بهالفئة مؤخرًا (خلال آخر 20 ساعة) — تم تجاهل الطلب لمنع التكرار");
-        }
-      }
-    }
+
+  /* لا يوجد هنا فحص "آخر 20 ساعة" الذي كان بالنسخة السابقة: مع فاصل أسبوعين
+     صار بلا فائدة، وكان يقدر يمنع نشرًا مشروعًا. منع التكرار مسؤولية
+     maybeAutoPublish وحدها الآن، ومكان واحد للقاعدة أوضح من مكانين. */
+
   const caption = (await generateCaption(env, category)) + "\n\n[auto]";
   const mediaUrl = `https://${WORKER_HOST}/img/${mediaKey}`;
 
