@@ -1332,6 +1332,9 @@ function renderDashboard() {
           <h4>النتيجة</h4>
           <div id="captionResult" class="caption-box"><span class="muted">اضغط "توليد المحتوى" حتى يظهر الكابشن هون.</span></div>
           <label>اختر ملف من المكتبة للنشر معه</label>
+          <input type="file" id="studioQuickUpload" accept="image/*,video/*" style="display:none;">
+          <button class="btn ghost" type="button" id="studioQuickUploadBtn" style="margin-bottom:10px;">📤 أو ارفع ملف جديد من الجوال</button>
+          <div id="studioUploadStatus" class="muted" style="font-size:12px;margin-bottom:8px;"></div>
           <div id="studioMediaPicker" class="media-grid"></div>
           <button class="btn full" id="studioPublishBtn" disabled>انشر الآن</button>
           <div id="studioPublishStatus" class="muted" style="margin-top:8px;font-size:12.5px;"></div>
@@ -1342,6 +1345,9 @@ function renderDashboard() {
         <div class="card">
           <h4>جدولة منشور</h4>
           <label>اختر ملف من المكتبة</label>
+          <input type="file" id="schedQuickUpload" accept="image/*,video/*" style="display:none;">
+          <button class="btn ghost" type="button" id="schedQuickUploadBtn" style="margin-bottom:10px;">📤 أو ارفع ملف جديد من الجوال</button>
+          <div id="schedUploadStatus" class="muted" style="font-size:12px;margin-bottom:8px;"></div>
           <div id="schedMediaPicker" class="media-grid"></div>
           <label>الكابشن</label>
           <textarea id="schedCaption"></textarea>
@@ -1542,7 +1548,7 @@ function renderDashboard() {
         if (data.success) mediaCache = data.items;
       }
       var el = document.getElementById(pickerId);
-      if (!mediaCache.length) { el.innerHTML = '<p class="muted">لا يوجد محتوى بالمكتبة بعد — ارفع ملف من تبويب "مكتبة المحتوى" أول.</p>'; return; }
+      if (!mediaCache.length) { el.innerHTML = '<p class="muted">لا يوجد محتوى بالمكتبة بعد — ارفع ملف من الزر فوق.</p>'; return; }
       el.innerHTML = mediaCache.map(function(m){ return pickerItemHtml(m, pickerId); }).join('');
       el.querySelectorAll('.picker-item').forEach(function(node){
         node.onclick = function(){
@@ -1553,6 +1559,42 @@ function renderDashboard() {
       });
     } catch (e) {}
   }
+
+  // رفع سريع من الجوال مباشرة داخل Studio أو Calendar — يرفع، يضيف للمكتبة محليًا،
+  // ويختاره تلقائيًا بدون ما يحتاج المستخدم يروح لتبويب "مكتبة المحتوى" لحاله.
+  async function quickUploadAndSelect(file, pickerId, statusElId){
+    var statusEl = document.getElementById(statusElId);
+    statusEl.textContent = '⏳ جاري الرفع...';
+    try {
+      var urlRes = await fetch('/get-upload-url', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ filename: file.name, contentType: file.type })
+      });
+      var urlData = await urlRes.json();
+      if (!urlData.success) { statusEl.textContent = '⚠️ ' + urlData.error; return; }
+      var putRes = await fetch(urlData.uploadUrl, { method: 'PUT', headers: {'Content-Type': file.type}, body: file });
+      if (!putRes.ok) { statusEl.textContent = '⚠️ فشل الرفع (كود ' + putRes.status + ')'; return; }
+      var isVideo = file.type.startsWith('video/');
+      var newItem = { key: urlData.key, url: '/img/' + urlData.key, isVideo: isVideo };
+      mediaCache.unshift(newItem);
+      pickerSelection[pickerId] = { key: newItem.key, isVideo: isVideo };
+      loadMediaIntoPicker(pickerId);
+      statusEl.textContent = '✅ تم الرفع والاختيار';
+    } catch (e) { statusEl.textContent = '⚠️ خطأ: ' + String(e); }
+  }
+
+  document.getElementById('studioQuickUploadBtn').addEventListener('click', function(){
+    document.getElementById('studioQuickUpload').click();
+  });
+  document.getElementById('studioQuickUpload').addEventListener('change', function(){
+    if (this.files[0]) quickUploadAndSelect(this.files[0], 'studioMediaPicker', 'studioUploadStatus');
+  });
+  document.getElementById('schedQuickUploadBtn').addEventListener('click', function(){
+    document.getElementById('schedQuickUpload').click();
+  });
+  document.getElementById('schedQuickUpload').addEventListener('change', function(){
+    if (this.files[0]) quickUploadAndSelect(this.files[0], 'schedMediaPicker', 'schedUploadStatus');
+  });
 
   document.getElementById('libUploadBtn').addEventListener('click', async function(){
     var fileInput = document.getElementById('libFile');
