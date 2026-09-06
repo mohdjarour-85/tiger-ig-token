@@ -1206,6 +1206,11 @@ function renderDashboard() {
   .btn[disabled]{opacity:.5;cursor:default;}
   .media-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;}
   .media-item{background:var(--navy3);border:1px solid var(--line);border-radius:10px;overflow:hidden;}
+  .picker-item{cursor:pointer;position:relative;}
+  .picker-item img,.picker-item video{height:80px;}
+  .picker-selected{border:3px solid var(--gold) !important;}
+  .picker-selected::after{content:"✓";position:absolute;top:4px;left:4px;background:var(--gold);color:var(--navy);
+    width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;}
   .media-item img,.media-item video{width:100%;height:90px;object-fit:cover;display:block;background:#000;}
   .media-item .mi-actions{padding:6px;display:flex;gap:5px;}
   .media-item .mi-actions button{flex:1;font-size:11px;padding:6px 4px;border-radius:6px;}
@@ -1327,7 +1332,7 @@ function renderDashboard() {
           <h4>النتيجة</h4>
           <div id="captionResult" class="caption-box"><span class="muted">اضغط "توليد المحتوى" حتى يظهر الكابشن هون.</span></div>
           <label>اختر ملف من المكتبة للنشر معه</label>
-          <select id="studioMediaSelect"><option value="">— اختر ملف —</option></select>
+          <div id="studioMediaPicker" class="media-grid"></div>
           <button class="btn full" id="studioPublishBtn" disabled>انشر الآن</button>
           <div id="studioPublishStatus" class="muted" style="margin-top:8px;font-size:12.5px;"></div>
         </div>
@@ -1337,7 +1342,7 @@ function renderDashboard() {
         <div class="card">
           <h4>جدولة منشور</h4>
           <label>اختر ملف من المكتبة</label>
-          <select id="schedMediaSelect"><option value="">— اختر ملف —</option></select>
+          <div id="schedMediaPicker" class="media-grid"></div>
           <label>الكابشن</label>
           <textarea id="schedCaption"></textarea>
           <div class="split">
@@ -1432,8 +1437,8 @@ function renderDashboard() {
         var frame = document.getElementById('editorFrame');
         if (!frame.getAttribute('src')) frame.setAttribute('src', '/editor');
       }
-      if (page === 'calendar') { loadMediaIntoSelect('schedMediaSelect'); loadSchedule(); }
-      if (page === 'studio') loadMediaIntoSelect('studioMediaSelect');
+      if (page === 'calendar') { loadMediaIntoPicker('schedMediaPicker'); loadSchedule(); }
+      if (page === 'studio') loadMediaIntoPicker('studioMediaPicker');
       if (page === 'analytics') { loadStats(true); loadAccountInsights(); loadPostList(); }
     });
   });
@@ -1509,30 +1514,43 @@ function renderDashboard() {
       btn.onclick = function(){
         var card = btn.closest('.media-item');
         var key = card.getAttribute('data-key');
+        var isVideo = card.getAttribute('data-video') === 'true';
+        pickerSelection.schedMediaPicker = { key: key, isVideo: isVideo };
         document.querySelector('.nav-item[data-page="calendar"]').click();
-        setTimeout(function(){
-          var sel = document.getElementById('schedMediaSelect');
-          sel.value = key;
-        }, 300);
+        setTimeout(function(){ loadMediaIntoPicker('schedMediaPicker'); }, 300);
       };
     });
   }
 
-  async function loadMediaIntoSelect(selectId){
+  // خرائط تخزّن الملف المختار حاليًا بكل بيكر (studio / sched) — {key, isVideo}
+  var pickerSelection = { studioMediaPicker: null, schedMediaPicker: null };
+
+  function pickerItemHtml(item, pickerId){
+    var isSel = pickerSelection[pickerId] && pickerSelection[pickerId].key === item.key;
+    var thumb = item.isVideo
+      ? '<video src="' + item.url + '" muted></video>'
+      : '<img src="' + item.url + '" alt="">';
+    return '<div class="media-item picker-item' + (isSel ? ' picker-selected' : '') + '" data-key="' + item.key + '" data-video="' + item.isVideo + '">' +
+      thumb + '</div>';
+  }
+
+  async function loadMediaIntoPicker(pickerId){
     try {
       if (!mediaCache.length) {
         var res = await fetch('/api/media-list');
         var data = await res.json();
         if (data.success) mediaCache = data.items;
       }
-      var sel = document.getElementById(selectId);
-      var current = sel.value;
-      sel.innerHTML = '<option value="">— اختر ملف —</option>' +
-        mediaCache.map(function(m){
-          return '<option value="' + m.key + '" data-video="' + m.isVideo + '">' +
-            (m.isVideo ? '🎬 ' : '🖼 ') + m.key.replace('posts/','') + '</option>';
-        }).join('');
-      if (current) sel.value = current;
+      var el = document.getElementById(pickerId);
+      if (!mediaCache.length) { el.innerHTML = '<p class="muted">لا يوجد محتوى بالمكتبة بعد — ارفع ملف من تبويب "مكتبة المحتوى" أول.</p>'; return; }
+      el.innerHTML = mediaCache.map(function(m){ return pickerItemHtml(m, pickerId); }).join('');
+      el.querySelectorAll('.picker-item').forEach(function(node){
+        node.onclick = function(){
+          el.querySelectorAll('.picker-item').forEach(function(n){ n.classList.remove('picker-selected'); });
+          node.classList.add('picker-selected');
+          pickerSelection[pickerId] = { key: node.getAttribute('data-key'), isVideo: node.getAttribute('data-video') === 'true' };
+        };
+      });
     } catch (e) {}
   }
 
@@ -1588,16 +1606,14 @@ function renderDashboard() {
     var btn = this;
     var statusEl = document.getElementById('studioPublishStatus');
     var caption = document.getElementById('captionResult').textContent;
-    var sel = document.getElementById('studioMediaSelect');
-    var key = sel.value;
-    if (!key) { statusEl.textContent = '⚠️ اختر ملف من المكتبة أول'; return; }
-    var isVideo = sel.options[sel.selectedIndex].getAttribute('data-video') === 'true';
+    var chosen = pickerSelection.studioMediaPicker;
+    if (!chosen) { statusEl.textContent = '⚠️ اختر ملف من المكتبة أول (دوس عليه بالشبكة فوق)'; return; }
     btn.disabled = true;
     statusEl.textContent = '⏳ جاري النشر... (لا تسكر الصفحة)';
     try {
       var res = await fetch('/api/publish-existing', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ key: key, caption: caption, media_type: isVideo ? 'video' : 'image' })
+        body: JSON.stringify({ key: chosen.key, caption: caption, media_type: chosen.isVideo ? 'video' : 'image' })
       });
       var data = await res.json();
       if (data.success) { statusEl.textContent = '✅ تم النشر بنجاح — Post ID: ' + data.postId; loadStats(); }
@@ -1608,20 +1624,18 @@ function renderDashboard() {
 
   document.getElementById('schedSaveBtn').addEventListener('click', async function(){
     var btn = this;
-    var sel = document.getElementById('schedMediaSelect');
-    var key = sel.value;
+    var chosen = pickerSelection.schedMediaPicker;
     var caption = document.getElementById('schedCaption').value;
     var dtLocal = document.getElementById('schedDt').value;
     var statusEl = document.getElementById('schedStatus');
-    if (!key || !dtLocal) { statusEl.textContent = 'اختر ملف ووقت النشر'; return; }
-    var isVideo = sel.options[sel.selectedIndex].getAttribute('data-video') === 'true';
+    if (!chosen || !dtLocal) { statusEl.textContent = 'اختر ملف (دوس عليه بالشبكة فوق) ووقت النشر'; return; }
     var dt = new Date(dtLocal).toISOString().slice(0,16);
     btn.disabled = true;
     statusEl.textContent = '⏳ جاري الحفظ...';
     try {
       var res = await fetch('/save-schedule', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ key: key, media_type: isVideo ? 'video' : 'image', caption: caption, scheduled_time: dt })
+        body: JSON.stringify({ key: chosen.key, media_type: chosen.isVideo ? 'video' : 'image', caption: caption, scheduled_time: dt })
       });
       var data = await res.json();
       if (data.success) {
