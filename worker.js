@@ -95,6 +95,32 @@ export default {
       `);
     }
 
+    if (url.pathname === "/start-debug") {
+      if (!env.IG_APP_ID || !env.IG_REDIRECT_URI) {
+        return html(errorBlock("متغيرات الإعداد ناقصة", "لازم تضيف IG_APP_ID و IG_REDIRECT_URI بإعدادات الورك أول."));
+      }
+      const scope = [
+        "instagram_business_basic",
+        "instagram_business_manage_messages",
+        "instagram_business_manage_comments",
+        "instagram_business_content_publish",
+      ].join(",");
+      const authUrl =
+        "https://www.instagram.com/oauth/authorize" +
+        `?client_id=${encodeURIComponent(env.IG_APP_ID)}` +
+        `&redirect_uri=${encodeURIComponent(env.IG_REDIRECT_URI)}` +
+        `&response_type=code` +
+        `&scope=${encodeURIComponent(scope)}`;
+      return html(`
+        <h1>معاينة رابط تسجيل الدخول (بدون تحويل)</h1>
+        <p>IG_APP_ID المقروء من الإعدادات: <b>${escapeHtml(String(env.IG_APP_ID))}</b> (طول النص: ${String(env.IG_APP_ID).length})</p>
+        <p>IG_REDIRECT_URI المقروء: <b>${escapeHtml(String(env.IG_REDIRECT_URI))}</b></p>
+        <p>الرابط الكامل اللي بينبعث فعليًا:</p>
+        <textarea readonly onclick="this.select()" style="min-height:160px;">${authUrl}</textarea>
+        <p class="note">انسخ الرابط من فوق وصوّره لي كامل (أو انسخه بنفسك بالمتصفح وافتحه) بدل ما تدوس أي زر.</p>
+      `);
+    }
+
     if (url.pathname === "/start") {
       if (!env.IG_APP_ID || !env.IG_REDIRECT_URI) {
         return html(errorBlock("متغيرات الإعداد ناقصة", "لازم تضيف IG_APP_ID و IG_REDIRECT_URI بإعدادات الورك أول."));
