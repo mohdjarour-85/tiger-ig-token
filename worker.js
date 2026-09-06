@@ -1097,7 +1097,7 @@ function renderDashboard() {
     font-size:14px;display:flex;align-items:center;gap:10px;}
   .nav button:hover{background:var(--navy3);color:#fff;}
   .nav button.active{background:var(--blue);color:#fff;font-weight:700;}
-  .install-btn{all:unset;cursor:pointer;display:none;margin-top:4px;padding:9px 12px;
+  .install-btn{all:unset;cursor:pointer;display:none;flex-shrink:0;padding:9px 14px;
     border-radius:9px;background:var(--gold);color:var(--navy);font-weight:700;font-size:12.5px;text-align:center;}
   .main{flex:1;padding:22px 20px;max-width:100%;overflow-x:hidden;}
   .topbar{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;flex-wrap:wrap;gap:10px;}
@@ -1157,7 +1157,6 @@ function renderDashboard() {
       <div class="brand">
         <img src="/img/brand/logo.png" alt="Tiger Event" class="brand-logo" onerror="this.style.display='none'">
         <small>لوحة تحكم إنستقرام</small>
-        <button class="install-btn" id="installBtn">⇩ تثبيت التطبيق</button>
       </div>
       <nav class="nav">
         <button class="nav-item active" data-page="dashboard">◈ لوحة التحكم</button>
@@ -1177,6 +1176,7 @@ function renderDashboard() {
           <h2 id="pageTitle">لوحة التحكم</h2>
           <p id="pageSubtitle">نظرة سريعة على حساب tiger4event</p>
         </div>
+        <button class="install-btn" id="installBtn">⇩ تثبيت التطبيق</button>
       </header>
 
       <section id="dashboard" class="page active">
@@ -1284,7 +1284,8 @@ function renderDashboard() {
       <section id="settings" class="page">
         <div class="card">
           <h4>تثبيت التطبيق على الجوال</h4>
-          <p class="muted">أندرويد / كروم: زر "تثبيت التطبيق" أعلى القائمة الجانبية.</p>
+          <p class="muted">كروم (أندرويد): زر "⇩ تثبيت التطبيق" أعلى الصفحة — إذا ظهر.</p>
+          <p class="muted">سامسونج إنترنت: القائمة (⋮) بالأسفل ← "إضافة صفحة إلى" ← "الشاشة الرئيسية".</p>
           <p class="muted">آيفون (سفاري): زر المشاركة ⬆️ ثم "إضافة إلى الشاشة الرئيسية".</p>
         </div>
         <div class="card">
