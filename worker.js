@@ -1144,9 +1144,11 @@ function renderDashboard() {
     display:none;z-index:99;max-width:90%;text-align:center;}
   @media(max-width:720px){
     .shell{flex-direction:column;}
-    .sidebar{width:100%;flex-direction:row;overflow-x:auto;padding:12px;}
+    .sidebar{width:100%;flex-direction:row;align-items:center;overflow-x:auto;padding:10px 12px;gap:12px;}
     .nav{flex-direction:row;}
-    .brand{display:none;}
+    .brand{flex-direction:row;align-items:center;flex-shrink:0;gap:8px;}
+    .brand img.brand-logo{height:32px;width:auto;max-width:110px;}
+    .brand small{display:none;}
     .split{grid-template-columns:1fr;}
   }
 </style>
