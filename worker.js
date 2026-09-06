@@ -1329,6 +1329,7 @@ function renderDashboard() {
           <label>اختر ملف من المكتبة للنشر معه</label>
           <select id="studioMediaSelect"><option value="">— اختر ملف —</option></select>
           <button class="btn full" id="studioPublishBtn" disabled>انشر الآن</button>
+          <div id="studioPublishStatus" class="muted" style="margin-top:8px;font-size:12.5px;"></div>
         </div>
       </section>
 
@@ -1585,22 +1586,23 @@ function renderDashboard() {
 
   document.getElementById('studioPublishBtn').addEventListener('click', async function(){
     var btn = this;
+    var statusEl = document.getElementById('studioPublishStatus');
     var caption = document.getElementById('captionResult').textContent;
     var sel = document.getElementById('studioMediaSelect');
     var key = sel.value;
-    if (!key) { showToast('⚠️ اختر ملف من المكتبة أول'); return; }
+    if (!key) { statusEl.textContent = '⚠️ اختر ملف من المكتبة أول'; return; }
     var isVideo = sel.options[sel.selectedIndex].getAttribute('data-video') === 'true';
     btn.disabled = true;
-    showToast('⏳ جاري النشر...');
+    statusEl.textContent = '⏳ جاري النشر... (لا تسكر الصفحة)';
     try {
       var res = await fetch('/api/publish-existing', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ key: key, caption: caption, media_type: isVideo ? 'video' : 'image' })
       });
       var data = await res.json();
-      if (data.success) { showToast('✅ تم النشر — Post ID: ' + data.postId); loadStats(); }
-      else showToast('⚠️ ' + (data.error || 'فشل النشر'));
-    } catch (e) { showToast('⚠️ خطأ: ' + String(e)); }
+      if (data.success) { statusEl.textContent = '✅ تم النشر بنجاح — Post ID: ' + data.postId; loadStats(); }
+      else statusEl.innerHTML = '⚠️ فشل النشر:<pre style="white-space:pre-wrap;font-size:11px;background:var(--navy3);padding:8px;border-radius:6px;margin-top:6px;">' + JSON.stringify(data, null, 2) + '</pre>';
+    } catch (e) { statusEl.textContent = '⚠️ خطأ: ' + String(e); }
     finally { btn.disabled = false; }
   });
 
