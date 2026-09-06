@@ -104,7 +104,6 @@ export default {
         "instagram_business_manage_messages",
         "instagram_business_manage_comments",
         "instagram_business_content_publish",
-        "instagram_business_manage_insights",
       ].join(",");
 
       const authUrl =
@@ -810,7 +809,7 @@ export default {
         if (!insData.data) {
           return json({
             success: false,
-            error: "فشل جلب التحليلات — غالبًا التوكن ما فيه صلاحية instagram_business_manage_insights بعد. أعد تسجيل الدخول من /start.",
+            error: "تحليلات الوصول والتفاعل غير مدعومة حاليًا — إعداد \"API setup with Instagram login\" المستخدم بالمشروع ما يدعم صلاحية التحليلات إطلاقًا (ميتا تتطلب التحول لإعداد \"Facebook Login\" الأكبر، وهذا يحتاج ربط صفحة فيسبوك ومراجعة من ميتا).",
             detail: insData,
           });
         }
@@ -1361,7 +1360,7 @@ function renderDashboard() {
           <h4>حالة الاتصال</h4>
           <p class="muted">حساب: <b>tiger4event</b></p>
           <p class="muted">لو التوكن انتهى (كل 60 يوم تقريبًا)، أعد الربط من <a href="/start" style="color:#F8A337;">هذا الرابط</a>.</p>
-          <p class="muted" style="color:var(--gold);">⚠️ صفحة التحليلات جديدة — لازم تعيد الربط مرة وحدة من نفس الرابط أعلاه عشان يضيف صلاحية "التحليلات" للتوكن الحالي (ما فيها بالتوكن القديم).</p>
+          <p class="muted" style="color:var(--gold);">⚠️ تحليلات الوصول والتفاعل (Insights) غير مدعومة بإعداد الحساب الحالي — تحتاج تحوّل أكبر لإعداد "Facebook Login" (ربط صفحة فيسبوك بالحساب + مراجعة من ميتا). الأرقام بتبويب التحليلات حاليًا من قاعدة بياناتك فقط.</p>
         </div>
         <div class="card">
           <h4>النشر التلقائي</h4>
