@@ -104,6 +104,7 @@ export default {
         "instagram_business_manage_messages",
         "instagram_business_manage_comments",
         "instagram_business_content_publish",
+        "instagram_business_manage_insights",
       ].join(",");
 
       const authUrl =
@@ -794,6 +795,61 @@ export default {
       return new Response(b64ToText(f.b64), { headers: { "content-type": f.type } });
     }
 
+    if (url.pathname === "/api/account-insights") {
+      if (!env.IG_ACCESS_TOKEN) return json({ success: false, error: "التوكن ناقص (IG_ACCESS_TOKEN)" });
+      try {
+        const meRes = await fetch(`https://graph.instagram.com/me?fields=id&access_token=${env.IG_ACCESS_TOKEN}`);
+        const meData = await meRes.json();
+        if (!meData.id) return json({ success: false, error: "معرف الحساب", detail: meData });
+
+        const metrics = "reach,views,accounts_engaged,total_interactions,follower_count";
+        const insRes = await fetch(
+          `https://graph.instagram.com/v22.0/${meData.id}/insights?metric=${metrics}&period=days_28&access_token=${env.IG_ACCESS_TOKEN}`
+        );
+        const insData = await insRes.json();
+        if (!insData.data) {
+          return json({
+            success: false,
+            error: "فشل جلب التحليلات — غالبًا التوكن ما فيه صلاحية instagram_business_manage_insights بعد. أعد تسجيل الدخول من /start.",
+            detail: insData,
+          });
+        }
+
+        const result = {};
+        for (const m of insData.data) {
+          const val = m.values && m.values.length ? m.values[m.values.length - 1].value : null;
+          result[m.name] = val;
+        }
+        return json({ success: true, period: "آخر 28 يوم", metrics: result });
+      } catch (e) {
+        return json({ success: false, error: String(e) });
+      }
+    }
+
+    if (url.pathname === "/api/media-insights") {
+      const postId = url.searchParams.get("post_id");
+      if (!env.IG_ACCESS_TOKEN) return json({ success: false, error: "التوكن ناقص (IG_ACCESS_TOKEN)" });
+      if (!postId) return json({ success: false, error: "post_id ناقص" });
+      try {
+        const metrics = "reach,likes,comments,saved,shares,total_interactions,views";
+        const insRes = await fetch(
+          `https://graph.instagram.com/v22.0/${postId}/insights?metric=${metrics}&access_token=${env.IG_ACCESS_TOKEN}`
+        );
+        const insData = await insRes.json();
+        if (!insData.data) {
+          return json({ success: false, error: "فشل جلب إحصائيات المنشور", detail: insData });
+        }
+        const result = {};
+        for (const m of insData.data) {
+          const val = m.values && m.values.length ? m.values[0].value : (m.total_value ? m.total_value.value : null);
+          result[m.name] = val;
+        }
+        return json({ success: true, metrics: result });
+      } catch (e) {
+        return json({ success: false, error: String(e) });
+      }
+    }
+
     if (url.pathname.startsWith("/img/")) {
       const key = url.pathname.replace("/img/", "");
       const obj = await env.IMAGES.get(key);
@@ -1275,11 +1331,22 @@ function renderDashboard() {
           <div class="stat"><span>إجمالي المنشورات</span><strong id="anTotal">—</strong></div>
           <div class="stat"><span>تم النشر</span><strong id="anPosted">—</strong></div>
           <div class="stat"><span>فشل</span><strong id="anFailed">—</strong></div>
-          <div class="stat"><span>الوصول / التفاعل</span><strong>—</strong></div>
+          <div class="stat"><span>المتابعون</span><strong id="anFollowers">—</strong></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><span>الوصول (28 يوم)</span><strong id="anReach">—</strong></div>
+          <div class="stat"><span>المشاهدات (28 يوم)</span><strong id="anViews">—</strong></div>
+          <div class="stat"><span>حسابات متفاعلة</span><strong id="anEngaged">—</strong></div>
+          <div class="stat"><span>إجمالي التفاعل</span><strong id="anInteractions">—</strong></div>
         </div>
         <div class="card">
           <h4>تحليلات الوصول والتفاعل</h4>
-          <p class="muted">تحتاج ربط Instagram Insights API — غير مفعّل حاليًا. الأرقام أعلاه من قاعدة بياناتك الخاصة فقط.</p>
+          <p class="muted" id="anNote">⏳ جاري التحميل...</p>
+        </div>
+        <div class="card">
+          <h4>إحصائيات كل منشور</h4>
+          <p class="sub">دوس "إحصائيات" على أي منشور منشور فعليًا</p>
+          <div id="anPostList" class="sched-list"></div>
         </div>
       </section>
 
@@ -1294,6 +1361,7 @@ function renderDashboard() {
           <h4>حالة الاتصال</h4>
           <p class="muted">حساب: <b>tiger4event</b></p>
           <p class="muted">لو التوكن انتهى (كل 60 يوم تقريبًا)، أعد الربط من <a href="/start" style="color:#F8A337;">هذا الرابط</a>.</p>
+          <p class="muted" style="color:var(--gold);">⚠️ صفحة التحليلات جديدة — لازم تعيد الربط مرة وحدة من نفس الرابط أعلاه عشان يضيف صلاحية "التحليلات" للتوكن الحالي (ما فيها بالتوكن القديم).</p>
         </div>
         <div class="card">
           <h4>النشر التلقائي</h4>
@@ -1340,7 +1408,7 @@ function renderDashboard() {
       }
       if (page === 'calendar') { loadMediaIntoSelect('schedMediaSelect'); loadSchedule(); }
       if (page === 'studio') loadMediaIntoSelect('studioMediaSelect');
-      if (page === 'analytics') loadStats(true);
+      if (page === 'analytics') { loadStats(true); loadAccountInsights(); loadPostList(); }
     });
   });
 
@@ -1542,6 +1610,68 @@ function renderDashboard() {
   function badgeHtml(status){
     var label = status === 'pending' ? 'قيد الانتظار' : (status === 'posted' ? 'تم النشر' : 'فشل');
     return '<span class="badge ' + status + '">' + label + '</span>';
+  }
+
+  async function loadAccountInsights(){
+    var note = document.getElementById('anNote');
+    try {
+      var res = await fetch('/api/account-insights');
+      var data = await res.json();
+      if (!data.success) {
+        note.textContent = '⚠️ ' + (data.error || 'تعذّر جلب التحليلات');
+        return;
+      }
+      var m = data.metrics;
+      document.getElementById('anReach').textContent = m.reach != null ? m.reach : '—';
+      document.getElementById('anViews').textContent = m.views != null ? m.views : '—';
+      document.getElementById('anEngaged').textContent = m.accounts_engaged != null ? m.accounts_engaged : '—';
+      document.getElementById('anInteractions').textContent = m.total_interactions != null ? m.total_interactions : '—';
+      document.getElementById('anFollowers').textContent = m.follower_count != null ? m.follower_count : '—';
+      note.textContent = 'بيانات ' + data.period + ' — مصدرها مباشرة من Instagram Insights API.';
+    } catch (e) {
+      note.textContent = '⚠️ خطأ: ' + String(e);
+    }
+  }
+
+  async function loadPostList(){
+    var list = document.getElementById('anPostList');
+    try {
+      var res = await fetch('/api/schedule-list');
+      var data = await res.json();
+      if (!data.success) { list.innerHTML = '<p class="muted">' + (data.error||'خطأ') + '</p>'; return; }
+      var posted = data.items.filter(function(it){ return it.status === 'posted' && it.post_id; }).slice(0, 10);
+      if (!posted.length) { list.innerHTML = '<p class="muted">لا يوجد منشورات منشورة بعد.</p>'; return; }
+      list.innerHTML = posted.map(function(it){
+        var preview = (it.caption || '').slice(0, 35);
+        return '<div class="row" data-post-id="' + it.post_id + '"><div><b>' + it.scheduled_time + '</b><div class="muted">' + preview + '</div>' +
+          '<div class="pi-result muted" style="font-size:11.5px;margin-top:4px;"></div></div>' +
+          '<button class="btn ghost pi-btn" style="font-size:11px;padding:6px 10px;">إحصائيات</button></div>';
+      }).join('');
+      document.querySelectorAll('.pi-btn').forEach(function(btn){
+        btn.onclick = async function(){
+          var row = btn.closest('.row');
+          var postId = row.getAttribute('data-post-id');
+          var resultEl = row.querySelector('.pi-result');
+          btn.disabled = true;
+          resultEl.textContent = '⏳ جاري الجلب...';
+          try {
+            var r = await fetch('/api/media-insights?post_id=' + postId);
+            var d = await r.json();
+            if (!d.success) { resultEl.textContent = '⚠️ ' + (d.error || 'فشل'); return; }
+            var m = d.metrics;
+            var parts = [];
+            if (m.reach != null) parts.push('وصول: ' + m.reach);
+            if (m.views != null) parts.push('مشاهدات: ' + m.views);
+            if (m.likes != null) parts.push('إعجابات: ' + m.likes);
+            if (m.comments != null) parts.push('تعليقات: ' + m.comments);
+            if (m.saved != null) parts.push('حفظ: ' + m.saved);
+            if (m.shares != null) parts.push('مشاركة: ' + m.shares);
+            resultEl.textContent = parts.join(' · ') || 'ما فيه بيانات كافية';
+          } catch (e) { resultEl.textContent = '⚠️ خطأ: ' + String(e); }
+          finally { btn.disabled = false; }
+        };
+      });
+    } catch (e) {}
   }
 
   async function loadSchedule(){
