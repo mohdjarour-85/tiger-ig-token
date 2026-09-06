@@ -14,5 +14,5 @@ database_id = "e38a9f6f-548a-4f93-af82-1e76ec6e3a47"
 [triggers]
 crons = ["*/15 * * * *", "0 15 * * 2,4,7"]
 [vars]
-IG_APP_ID = "1690883633043181"
+IG_APP_ID = "1625307945973050"
 IG_REDIRECT_URI = "https://tiger-ig-token2.mohdjarour.workers.dev/callback"
