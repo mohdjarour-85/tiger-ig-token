@@ -13,6 +13,14 @@
  *   R2_ACCOUNT_ID       -> Account ID من لوحة Cloudflare
  *   ANTHROPIC_API_KEY   -> مفتاح Claude API (لتوليد الكابشن تلقائيًا)
  *
+ * ربط فيسبوك (نشر حقيقي + تحليلات حقيقية):
+ *   FB_REDIRECT_URI      -> رابط هذا الورك نفسه + /fb-callback (يُسجَّل بمنتج
+ *                            "Facebook Login" بنفس تطبيق Meta الموجود أصلاً،
+ *                            منفصل عن قائمة روابط انستقرام)
+ *   FB_PAGE_ID           -> رقم صفحة Tiger Event بفيسبوك (يظهر بعد /fb-start)
+ *   FB_PAGE_ACCESS_TOKEN -> توكن الصفحة (يظهر بعد /fb-start) — Secret، ثابت
+ *                            ولا ينتهي طالما التطبيق ما انسحبت صلاحياته
+ *
  * النشر التلقائي (بدون تدخل يدوي):
  *   ارفع 4 صور جاهزة لـ R2 باسم: templates-wedding.jpg / templates-event.jpg /
  *   templates-production.jpg / templates-conference.jpg
@@ -197,6 +205,91 @@ export default {
       }
     }
 
+    /* -------- ربط فيسبوك (Facebook Login) — منفصل تمامًا عن مسار انستقرام
+     * فوق. يستخدم نفس App ID / App Secret (IG_APP_ID / IG_APP_SECRET) لأنه
+     * نفس تطبيق Meta، بس يحتاج تفعيل منتج "Facebook Login" بالتطبيق وإضافة
+     * FB_REDIRECT_URI كرابط رجوع مسموح بإعدادات ذاك المنتج (منفصل عن قائمة
+     * روابط انستقرام). النتيجة: توكن صفحة فيسبوك يُستخدم للنشر وللتحليلات
+     * الحقيقية (فيسبوك + انستقرام معًا، لأن الحساب مربوط بالصفحة أصلًا).
+     * -------------------------------------------------------------------- */
+    if (url.pathname === "/fb-start") {
+      if (!env.IG_APP_ID || !env.FB_REDIRECT_URI) {
+        return html(errorBlock("متغيرات الإعداد ناقصة", "لازم تضيف FB_REDIRECT_URI بإعدادات الورك أول (نفس IG_APP_ID المستخدم أصلاً)."));
+      }
+      const scope = [
+        "pages_show_list",
+        "pages_read_engagement",
+        "pages_manage_posts",
+        "instagram_basic",
+        "instagram_manage_insights",
+      ].join(",");
+      const authUrl =
+        "https://www.facebook.com/v21.0/dialog/oauth" +
+        `?client_id=${encodeURIComponent(env.IG_APP_ID)}` +
+        `&redirect_uri=${encodeURIComponent(env.FB_REDIRECT_URI)}` +
+        `&response_type=code` +
+        `&scope=${encodeURIComponent(scope)}`;
+      return Response.redirect(authUrl, 302);
+    }
+
+    if (url.pathname === "/fb-callback") {
+      const code = url.searchParams.get("code");
+      const errDesc = url.searchParams.get("error_description");
+      if (errDesc) return html(errorBlock("فيسبوك رفض تسجيل الدخول", errDesc));
+      if (!code) return html(errorBlock("ما وصل كود", "الرابط ما فيه ?code= — جرب ترجع لصفحة /fb-start من جديد."));
+
+      try {
+        const tokenUrl =
+          "https://graph.facebook.com/v21.0/oauth/access_token" +
+          `?client_id=${encodeURIComponent(env.IG_APP_ID)}` +
+          `&redirect_uri=${encodeURIComponent(env.FB_REDIRECT_URI)}` +
+          `&client_secret=${encodeURIComponent(env.IG_APP_SECRET)}` +
+          `&code=${encodeURIComponent(code)}`;
+        const shortRes = await fetch(tokenUrl);
+        const shortData = await shortRes.json();
+        if (!shortData.access_token) {
+          return html(errorBlock("فشلت خطوة 1 (توكن المستخدم)", JSON.stringify(shortData, null, 2)));
+        }
+
+        const longUrl =
+          "https://graph.facebook.com/v21.0/oauth/access_token" +
+          "?grant_type=fb_exchange_token" +
+          `&client_id=${encodeURIComponent(env.IG_APP_ID)}` +
+          `&client_secret=${encodeURIComponent(env.IG_APP_SECRET)}` +
+          `&fb_exchange_token=${encodeURIComponent(shortData.access_token)}`;
+        const longRes = await fetch(longUrl);
+        const longData = await longRes.json();
+        if (!longData.access_token) {
+          return html(errorBlock("فشلت خطوة 2 (توكن طويل)", JSON.stringify(longData, null, 2)));
+        }
+
+        const pagesRes = await fetch(
+          `https://graph.facebook.com/v21.0/me/accounts?access_token=${encodeURIComponent(longData.access_token)}`
+        );
+        const pagesData = await pagesRes.json();
+        if (!pagesData.data || !pagesData.data.length) {
+          return html(errorBlock("ما لقينا صفحات فيسبوك", JSON.stringify(pagesData, null, 2)));
+        }
+
+        const rows = pagesData.data
+          .map(
+            (p) =>
+              `<p>📄 <b>${escapeHtml(p.name)}</b> (ID: <code>${p.id}</code>)<br>Page Access Token:<br>` +
+              `<textarea readonly onclick="this.select()">${p.access_token}</textarea></p>`
+          )
+          .join("");
+
+        return html(`
+          <h1>تم بنجاح ✅</h1>
+          <p>هذي صفحات فيسبوك المرتبطة بحسابك. دوّر على صفحة <b>Tiger Event</b> وانسخ الـ ID والتوكن تبعها:</p>
+          ${rows}
+          <p class="note">احفظهم بإعدادات الورك: <b>FB_PAGE_ID</b> (رقم الصفحة) و<b>FB_PAGE_ACCESS_TOKEN</b> (التوكن) — خليه Secret. هذا التوكن ثابت وما ينتهي طالما ما سحبت صلاحيات التطبيق.</p>
+        `);
+      } catch (e) {
+        return html(errorBlock("خطأ غير متوقع", String(e)));
+      }
+    }
+
     if (url.pathname === "/publish") {
       if (!env.IG_ACCESS_TOKEN) {
         return html(errorBlock("التوكن ناقص", "أضف IG_ACCESS_TOKEN بإعدادات الورك أول."));
@@ -242,6 +335,23 @@ export default {
         return html(`<h1>✅ تم النشر بنجاح</h1><p>Post ID: ${publishData.id}</p>`);
       } catch (e) {
         return html(errorBlock("خطأ غير متوقع بالنشر", String(e)));
+      }
+    }
+
+    if (url.pathname === "/publish-fb") {
+      if (!env.FB_PAGE_ACCESS_TOKEN || !env.FB_PAGE_ID) {
+        return html(errorBlock("إعداد فيسبوك ناقص", "أضف FB_PAGE_ID و FB_PAGE_ACCESS_TOKEN بإعدادات الورك أول (اربط الصفحة من /fb-start)."));
+      }
+      const imageUrl = url.searchParams.get("image_url");
+      const caption = url.searchParams.get("caption") || "";
+      if (!imageUrl) {
+        return html(errorBlock("رابط الصورة ناقص", "استخدم ?image_url=...&caption=..."));
+      }
+      try {
+        const result = await publishToFacebook(env, imageUrl, caption, false);
+        return html(`<h1>✅ تم النشر على فيسبوك</h1><p>Post ID: ${result.postId}</p>`);
+      } catch (e) {
+        return html(errorBlock("فشل النشر على فيسبوك", String(e)));
       }
     }
 
@@ -458,13 +568,14 @@ export default {
         const mediaType = body.media_type || "image";
         const caption = body.caption || "";
         const scheduledTime = body.scheduled_time;
+        const platforms = Array.isArray(body.platforms) && body.platforms.length ? body.platforms.join(",") : "instagram";
         if (!key || !scheduledTime) {
           return json({ success: false, error: "بيانات ناقصة" });
         }
 
         await env.DB.prepare(
-          "INSERT INTO scheduled_posts (media_key, media_type, caption, scheduled_time) VALUES (?, ?, ?, ?)"
-        ).bind(key, mediaType, caption, scheduledTime).run();
+          "INSERT INTO scheduled_posts (media_key, media_type, caption, scheduled_time, platforms) VALUES (?, ?, ?, ?, ?)"
+        ).bind(key, mediaType, caption, scheduledTime, platforms).run();
 
         return json({ success: true });
       } catch (e) {
@@ -791,14 +902,17 @@ export default {
     }
 
     if (url.pathname === "/api/publish-existing" && request.method === "POST") {
-      if (!env.IG_ACCESS_TOKEN) return json({ success: false, error: "التوكن ناقص (IG_ACCESS_TOKEN)" });
+      if (!env.IG_ACCESS_TOKEN && !env.FB_PAGE_ACCESS_TOKEN) {
+        return json({ success: false, error: "ما فيه أي حساب مربوط (لا انستقرام ولا فيسبوك)" });
+      }
       try {
         const body = await request.json();
         const key = body.key;
         const caption = body.caption || "";
         const mediaType = body.media_type || "image";
+        const platforms = Array.isArray(body.platforms) && body.platforms.length ? body.platforms : ["instagram"];
         if (!key) return json({ success: false, error: "مفتاح الملف ناقص" });
-        const result = await publishMediaKey(env, key, mediaType, caption);
+        const result = await publishMediaKey(env, key, mediaType, caption, platforms);
         return json({ success: true, postId: result.postId });
       } catch (e) {
         return json({ success: false, error: String(e) });
@@ -846,6 +960,70 @@ export default {
           result[m.name] = val;
         }
         return json({ success: true, period: "آخر 28 يوم", metrics: result });
+      } catch (e) {
+        return json({ success: false, error: String(e) });
+      }
+    }
+
+    /* التحليلات الحقيقية (فيسبوك + انستقرام معًا) عبر توكن صفحة فيسبوك.
+     * هذا يحل مشكلة /api/account-insights القديمة: توكن "API setup with
+     * Instagram login" أصلاً ما يدعم صلاحية التحليلات، بس توكن صفحة فيسبوك
+     * (بعد ربطها من /fb-start) يدعمها كاملة لكلا الحسابين لأن انستقرام
+     * مربوط بالصفحة أصلًا بحسابكم على Meta Business Suite. */
+    if (url.pathname === "/api/real-insights") {
+      if (!env.FB_PAGE_ACCESS_TOKEN || !env.FB_PAGE_ID) {
+        return json({
+          success: false,
+          error: "فيسبوك مو مربوط بعد (FB_PAGE_ID / FB_PAGE_ACCESS_TOKEN) — التحليلات الحقيقية تحتاج ربط صفحة فيسبوك أول من /fb-start.",
+        });
+      }
+      try {
+        const result = { facebook: {}, instagram: {} };
+
+        const fbMetrics = "page_impressions,page_engaged_users,page_post_engagements";
+        const fbRes = await fetch(
+          `https://graph.facebook.com/v21.0/${env.FB_PAGE_ID}/insights?metric=${fbMetrics}&period=days_28&access_token=${env.FB_PAGE_ACCESS_TOKEN}`
+        );
+        const fbData = await fbRes.json();
+        if (fbData.data) {
+          for (const m of fbData.data) {
+            const vals = m.values || [];
+            result.facebook[m.name] = vals.length ? vals[vals.length - 1].value : null;
+          }
+        } else {
+          result.facebookError = fbData;
+        }
+
+        const fanRes = await fetch(
+          `https://graph.facebook.com/v21.0/${env.FB_PAGE_ID}?fields=fan_count&access_token=${env.FB_PAGE_ACCESS_TOKEN}`
+        );
+        const fanData = await fanRes.json();
+        result.facebook.fan_count = fanData.fan_count != null ? fanData.fan_count : null;
+
+        const igLinkRes = await fetch(
+          `https://graph.facebook.com/v21.0/${env.FB_PAGE_ID}?fields=instagram_business_account&access_token=${env.FB_PAGE_ACCESS_TOKEN}`
+        );
+        const igLinkData = await igLinkRes.json();
+        const igId = igLinkData.instagram_business_account && igLinkData.instagram_business_account.id;
+        if (igId) {
+          const igMetrics = "reach,views,accounts_engaged,total_interactions,follower_count";
+          const igRes = await fetch(
+            `https://graph.facebook.com/v21.0/${igId}/insights?metric=${igMetrics}&period=days_28&access_token=${env.FB_PAGE_ACCESS_TOKEN}`
+          );
+          const igData = await igRes.json();
+          if (igData.data) {
+            for (const m of igData.data) {
+              const vals = m.values || [];
+              result.instagram[m.name] = vals.length ? vals[vals.length - 1].value : null;
+            }
+          } else {
+            result.instagramError = igData;
+          }
+        } else {
+          result.instagramError = "صفحة فيسبوك مو مربوطة بحساب انستقرام أعمال — اربطهم من Meta Business Suite أول.";
+        }
+
+        return json({ success: true, period: "آخر 28 يوم", ...result });
       } catch (e) {
         return json({ success: false, error: String(e) });
       }
@@ -1036,7 +1214,7 @@ async function autoPublishNext(env) {
 }
 
 async function runScheduledPosts(env) {
-  if (!env.DB || !env.IMAGES || !env.IG_ACCESS_TOKEN) return;
+  if (!env.DB || !env.IMAGES) return;
   const now = new Date().toISOString();
   const { results } = await env.DB.prepare(
     "SELECT * FROM scheduled_posts WHERE status = 'pending' AND scheduled_time <= ? ORDER BY scheduled_time ASC"
@@ -1044,7 +1222,8 @@ async function runScheduledPosts(env) {
 
   for (const post of results) {
     try {
-      const result = await publishMediaKey(env, post.media_key, post.media_type, post.caption || "");
+      const platforms = post.platforms ? String(post.platforms).split(",") : ["instagram"];
+      const result = await publishMediaKey(env, post.media_key, post.media_type, post.caption || "", platforms);
       await env.DB.prepare("UPDATE scheduled_posts SET status = 'posted', post_id = ? WHERE id = ?")
         .bind(result.postId, post.id).run();
     } catch (e) {
@@ -1054,47 +1233,82 @@ async function runScheduledPosts(env) {
   }
 }
 
+/* نشر مباشر على صفحة فيسبوك (Tiger Event) عبر Page Access Token.
+   صورة -> /photos، فيديو -> /videos (نفس منطق انستقرام لكن أبسط: فيسبوك
+   ما يحتاج انتظار معالجة قبل الرد). */
+async function publishToFacebook(env, mediaUrl, caption, isVideo) {
+  if (!env.FB_PAGE_ACCESS_TOKEN || !env.FB_PAGE_ID) {
+    throw new Error("إعداد فيسبوك ناقص (FB_PAGE_ID / FB_PAGE_ACCESS_TOKEN) — اربط الصفحة من /fb-start");
+  }
+  const endpoint = isVideo
+    ? `https://graph.facebook.com/v21.0/${env.FB_PAGE_ID}/videos`
+    : `https://graph.facebook.com/v21.0/${env.FB_PAGE_ID}/photos`;
+  const params = isVideo
+    ? { file_url: mediaUrl, description: caption || "", access_token: env.FB_PAGE_ACCESS_TOKEN }
+    : { url: mediaUrl, caption: caption || "", access_token: env.FB_PAGE_ACCESS_TOKEN };
+  const res = await fetch(endpoint, { method: "POST", body: new URLSearchParams(params) });
+  const data = await res.json();
+  const postId = data.post_id || data.id;
+  if (!postId) throw new Error("فيسبوك: " + JSON.stringify(data));
+  return { postId };
+}
+
 /* منطق نشر موحّد (إنشاء حاوية + انتظار معالجة الفيديو لو لزم + نشر نهائي)،
    يستخدمه كل من: runScheduledPosts (الجدولة التلقائية) و
-   /api/publish-existing (النشر الفوري من لوحة التحكم لملف موجود بالمكتبة). */
-async function publishMediaKey(env, key, mediaType, caption) {
+   /api/publish-existing (النشر الفوري من لوحة التحكم لملف موجود بالمكتبة).
+   platforms: مصفوفة تحتوي "instagram" و/أو "facebook" — الافتراضي انستقرام
+   بس عشان ما ينكسر أي استدعاء قديم ما يمرر المعامل هذا. */
+async function publishMediaKey(env, key, mediaType, caption, platforms) {
+  platforms = platforms && platforms.length ? platforms : ["instagram"];
   const mediaUrl = `https://${WORKER_HOST}/img/${key}`;
-  const meRes = await fetch(`https://graph.instagram.com/me?fields=id&access_token=${env.IG_ACCESS_TOKEN}`);
-  const meData = await meRes.json();
-  if (!meData.id) throw new Error("معرف الحساب: " + JSON.stringify(meData));
-
   const isVideo = mediaType === "video";
-  const containerParams = isVideo
-    ? { media_type: "REELS", video_url: mediaUrl, caption: caption || "", access_token: env.IG_ACCESS_TOKEN }
-    : { image_url: mediaUrl, caption: caption || "", access_token: env.IG_ACCESS_TOKEN };
+  const ids = [];
 
-  const containerRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media`, {
-    method: "POST",
-    body: new URLSearchParams(containerParams),
-  });
-  const containerData = await containerRes.json();
-  if (!containerData.id) throw new Error("إنشاء الحاوية: " + JSON.stringify(containerData));
+  if (platforms.includes("instagram")) {
+    if (!env.IG_ACCESS_TOKEN) throw new Error("توكن انستقرام ناقص (IG_ACCESS_TOKEN)");
+    const meRes = await fetch(`https://graph.instagram.com/me?fields=id&access_token=${env.IG_ACCESS_TOKEN}`);
+    const meData = await meRes.json();
+    if (!meData.id) throw new Error("معرف حساب انستقرام: " + JSON.stringify(meData));
 
-  if (isVideo) {
-    let ready = false;
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 5000));
-      const statusRes = await fetch(`https://graph.instagram.com/v21.0/${containerData.id}?fields=status_code&access_token=${env.IG_ACCESS_TOKEN}`);
-      const statusData = await statusRes.json();
-      if (statusData.status_code === "FINISHED") { ready = true; break; }
-      if (statusData.status_code === "ERROR") throw new Error("فشلت معالجة الملف");
+    const containerParams = isVideo
+      ? { media_type: "REELS", video_url: mediaUrl, caption: caption || "", access_token: env.IG_ACCESS_TOKEN }
+      : { image_url: mediaUrl, caption: caption || "", access_token: env.IG_ACCESS_TOKEN };
+
+    const containerRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media`, {
+      method: "POST",
+      body: new URLSearchParams(containerParams),
+    });
+    const containerData = await containerRes.json();
+    if (!containerData.id) throw new Error("إنشاء حاوية انستقرام: " + JSON.stringify(containerData));
+
+    if (isVideo) {
+      let ready = false;
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        const statusRes = await fetch(`https://graph.instagram.com/v21.0/${containerData.id}?fields=status_code&access_token=${env.IG_ACCESS_TOKEN}`);
+        const statusData = await statusRes.json();
+        if (statusData.status_code === "FINISHED") { ready = true; break; }
+        if (statusData.status_code === "ERROR") throw new Error("فشلت معالجة الملف بانستقرام");
+      }
+      if (!ready) throw new Error("استغرقت معالجة انستقرام وقت طويل");
     }
-    if (!ready) throw new Error("استغرقت المعالجة وقت طويل");
+
+    const publishRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media_publish`, {
+      method: "POST",
+      body: new URLSearchParams({ creation_id: containerData.id, access_token: env.IG_ACCESS_TOKEN }),
+    });
+    const publishData = await publishRes.json();
+    if (!publishData.id) throw new Error("نشر انستقرام: " + JSON.stringify(publishData));
+    ids.push("IG:" + publishData.id);
   }
 
-  const publishRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media_publish`, {
-    method: "POST",
-    body: new URLSearchParams({ creation_id: containerData.id, access_token: env.IG_ACCESS_TOKEN }),
-  });
-  const publishData = await publishRes.json();
-  if (!publishData.id) throw new Error("النشر: " + JSON.stringify(publishData));
+  if (platforms.includes("facebook")) {
+    const fbResult = await publishToFacebook(env, mediaUrl, caption, isVideo);
+    ids.push("FB:" + fbResult.postId);
+  }
 
-  return { postId: publishData.id };
+  if (!ids.length) throw new Error("ما تحدد أي منصة للنشر");
+  return { postId: ids.join(" | ") };
 }
 
 function errorBlock(title, detail) {
@@ -1336,6 +1550,11 @@ function renderDashboard() {
           <button class="btn ghost" type="button" id="studioQuickUploadBtn" style="margin-bottom:10px;">📤 أو ارفع ملف جديد من الجوال</button>
           <div id="studioUploadStatus" class="muted" style="font-size:12px;margin-bottom:8px;"></div>
           <div id="studioMediaPicker" class="media-grid"></div>
+          <label>انشر على</label>
+          <div style="display:flex;gap:14px;margin-bottom:8px;">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input type="checkbox" id="studioPubIG" checked> انستقرام</label>
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input type="checkbox" id="studioPubFB"> فيسبوك</label>
+          </div>
           <button class="btn full" id="studioPublishBtn" disabled>انشر الآن</button>
           <div id="studioPublishStatus" class="muted" style="margin-top:8px;font-size:12.5px;"></div>
         </div>
@@ -1353,6 +1572,11 @@ function renderDashboard() {
           <textarea id="schedCaption"></textarea>
           <div class="split">
             <div><label>التاريخ والوقت</label><input type="datetime-local" id="schedDt"></div>
+          </div>
+          <label>انشر على</label>
+          <div style="display:flex;gap:14px;margin-bottom:8px;">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input type="checkbox" id="schedPubIG" checked> انستقرام</label>
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400;"><input type="checkbox" id="schedPubFB"> فيسبوك</label>
           </div>
           <button class="btn full" id="schedSaveBtn">إضافة للجدول</button>
           <div id="schedStatus" class="muted" style="margin-top:8px;font-size:12.5px;"></div>
@@ -1376,6 +1600,11 @@ function renderDashboard() {
           <div class="stat"><span>حسابات متفاعلة</span><strong id="anEngaged">—</strong></div>
           <div class="stat"><span>إجمالي التفاعل</span><strong id="anInteractions">—</strong></div>
         </div>
+        <div class="stats">
+          <div class="stat"><span>متابعين فيسبوك</span><strong id="anFbFans">—</strong></div>
+          <div class="stat"><span>وصول فيسبوك (28 يوم)</span><strong id="anFbReach">—</strong></div>
+          <div class="stat"><span>تفاعل فيسبوك (28 يوم)</span><strong id="anFbEngaged">—</strong></div>
+        </div>
         <div class="card">
           <h4>تحليلات الوصول والتفاعل</h4>
           <p class="muted" id="anNote">⏳ جاري التحميل...</p>
@@ -1396,9 +1625,13 @@ function renderDashboard() {
         </div>
         <div class="card">
           <h4>حالة الاتصال</h4>
-          <p class="muted">حساب: <b>tiger4event</b></p>
+          <p class="muted">حساب انستقرام: <b>tiger4event</b></p>
           <p class="muted">لو التوكن انتهى (كل 60 يوم تقريبًا)، أعد الربط من <a href="/start" style="color:#F8A337;">هذا الرابط</a>.</p>
-          <p class="muted" style="color:var(--gold);">⚠️ تحليلات الوصول والتفاعل (Insights) غير مدعومة بإعداد الحساب الحالي — تحتاج تحوّل أكبر لإعداد "Facebook Login" (ربط صفحة فيسبوك بالحساب + مراجعة من ميتا). الأرقام بتبويب التحليلات حاليًا من قاعدة بياناتك فقط.</p>
+        </div>
+        <div class="card">
+          <h4>ربط فيسبوك</h4>
+          <p class="muted">صفحة: <b>Tiger Event</b> — يفعّل النشر على فيسبوك ويكشف تحليلات حقيقية (فيسبوك + انستقرام معًا) بدل أرقام قاعدة البيانات فقط.</p>
+          <p class="muted">لربط الصفحة أول مرة أو تجديد التوكن: <a href="/fb-start" style="color:#F8A337;">اضغط هنا</a>.</p>
         </div>
         <div class="card">
           <h4>النشر التلقائي</h4>
@@ -1649,16 +1882,20 @@ function renderDashboard() {
     var statusEl = document.getElementById('studioPublishStatus');
     var caption = document.getElementById('captionResult').textContent;
     var chosen = pickerSelection.studioMediaPicker;
+    var platforms = [];
+    if (document.getElementById('studioPubIG').checked) platforms.push('instagram');
+    if (document.getElementById('studioPubFB').checked) platforms.push('facebook');
     if (!chosen) { statusEl.textContent = '⚠️ اختر ملف من المكتبة أول (دوس عليه بالشبكة فوق)'; return; }
+    if (!platforms.length) { statusEl.textContent = '⚠️ اختر منصة واحدة على الأقل'; return; }
     btn.disabled = true;
     statusEl.textContent = '⏳ جاري النشر... (لا تسكر الصفحة)';
     try {
       var res = await fetch('/api/publish-existing', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ key: chosen.key, caption: caption, media_type: chosen.isVideo ? 'video' : 'image' })
+        body: JSON.stringify({ key: chosen.key, caption: caption, media_type: chosen.isVideo ? 'video' : 'image', platforms: platforms })
       });
       var data = await res.json();
-      if (data.success) { statusEl.textContent = '✅ تم النشر بنجاح — Post ID: ' + data.postId; loadStats(); }
+      if (data.success) { statusEl.textContent = '✅ تم النشر بنجاح — ' + data.postId; loadStats(); }
       else statusEl.innerHTML = '⚠️ فشل النشر:<pre style="white-space:pre-wrap;font-size:11px;background:var(--navy3);padding:8px;border-radius:6px;margin-top:6px;">' + JSON.stringify(data, null, 2) + '</pre>';
     } catch (e) { statusEl.textContent = '⚠️ خطأ: ' + String(e); }
     finally { btn.disabled = false; }
@@ -1670,14 +1907,18 @@ function renderDashboard() {
     var caption = document.getElementById('schedCaption').value;
     var dtLocal = document.getElementById('schedDt').value;
     var statusEl = document.getElementById('schedStatus');
+    var platforms = [];
+    if (document.getElementById('schedPubIG').checked) platforms.push('instagram');
+    if (document.getElementById('schedPubFB').checked) platforms.push('facebook');
     if (!chosen || !dtLocal) { statusEl.textContent = 'اختر ملف (دوس عليه بالشبكة فوق) ووقت النشر'; return; }
+    if (!platforms.length) { statusEl.textContent = 'اختر منصة واحدة على الأقل'; return; }
     var dt = new Date(dtLocal).toISOString().slice(0,16);
     btn.disabled = true;
     statusEl.textContent = '⏳ جاري الحفظ...';
     try {
       var res = await fetch('/save-schedule', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ key: chosen.key, media_type: chosen.isVideo ? 'video' : 'image', caption: caption, scheduled_time: dt })
+        body: JSON.stringify({ key: chosen.key, media_type: chosen.isVideo ? 'video' : 'image', caption: caption, scheduled_time: dt, platforms: platforms })
       });
       var data = await res.json();
       if (data.success) {
@@ -1698,19 +1939,39 @@ function renderDashboard() {
   async function loadAccountInsights(){
     var note = document.getElementById('anNote');
     try {
-      var res = await fetch('/api/account-insights');
+      var res = await fetch('/api/real-insights');
       var data = await res.json();
-      if (!data.success) {
-        note.textContent = '⚠️ ' + (data.error || 'تعذّر جلب التحليلات');
+      if (data.success) {
+        var ig = data.instagram || {};
+        var fb = data.facebook || {};
+        document.getElementById('anReach').textContent = ig.reach != null ? ig.reach : '—';
+        document.getElementById('anViews').textContent = ig.views != null ? ig.views : '—';
+        document.getElementById('anEngaged').textContent = ig.accounts_engaged != null ? ig.accounts_engaged : '—';
+        document.getElementById('anInteractions').textContent = ig.total_interactions != null ? ig.total_interactions : '—';
+        document.getElementById('anFollowers').textContent = ig.follower_count != null ? ig.follower_count : '—';
+        document.getElementById('anFbFans').textContent = fb.fan_count != null ? fb.fan_count : '—';
+        document.getElementById('anFbReach').textContent = fb.page_impressions != null ? fb.page_impressions : '—';
+        document.getElementById('anFbEngaged').textContent = fb.page_engaged_users != null ? fb.page_engaged_users : '—';
+        note.textContent = data.instagramError
+          ? '⚠️ فيسبوك مربوط، لكن تحليلات انستقرام: ' + (data.instagramError.error ? data.instagramError.error.message : data.instagramError)
+          : 'بيانات ' + data.period + ' — مصدرها مباشرة من Facebook/Instagram Insights API (فيسبوك مربوط).';
         return;
       }
-      var m = data.metrics;
+
+      // فيسبوك مو مربوط بعد -> نرجع للطريقة القديمة (غالبًا برضو تفشل، لكن كخيار احتياطي)
+      var res2 = await fetch('/api/account-insights');
+      var data2 = await res2.json();
+      if (!data2.success) {
+        note.textContent = '⚠️ ' + (data2.error || data.error || 'تعذّر جلب التحليلات');
+        return;
+      }
+      var m = data2.metrics;
       document.getElementById('anReach').textContent = m.reach != null ? m.reach : '—';
       document.getElementById('anViews').textContent = m.views != null ? m.views : '—';
       document.getElementById('anEngaged').textContent = m.accounts_engaged != null ? m.accounts_engaged : '—';
       document.getElementById('anInteractions').textContent = m.total_interactions != null ? m.total_interactions : '—';
       document.getElementById('anFollowers').textContent = m.follower_count != null ? m.follower_count : '—';
-      note.textContent = 'بيانات ' + data.period + ' — مصدرها مباشرة من Instagram Insights API.';
+      note.textContent = 'بيانات ' + data2.period + ' — مصدرها مباشرة من Instagram Insights API.';
     } catch (e) {
       note.textContent = '⚠️ خطأ: ' + String(e);
     }
