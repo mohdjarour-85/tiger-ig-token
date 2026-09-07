@@ -1020,7 +1020,13 @@ export default {
         const igLinkData = await igLinkRes.json();
         const igId = igLinkData.instagram_business_account && igLinkData.instagram_business_account.id;
         if (igId) {
-          const igMetrics = "reach,views,accounts_engaged,total_interactions,follower_count";
+          const basicRes = await fetch(
+            `https://graph.facebook.com/v21.0/${igId}?fields=followers_count,media_count&access_token=${env.FB_PAGE_ACCESS_TOKEN}`
+          );
+          const basicData = await basicRes.json();
+          if (basicData.followers_count != null) result.instagram.follower_count = basicData.followers_count;
+
+          const igMetrics = "reach,views,accounts_engaged,total_interactions";
           const igRes = await fetch(
             `https://graph.facebook.com/v21.0/${igId}/insights?metric=${igMetrics}&period=days_28&access_token=${env.FB_PAGE_ACCESS_TOKEN}`
           );
@@ -1031,7 +1037,7 @@ export default {
               result.instagram[m.name] = vals.length ? vals[vals.length - 1].value : null;
             }
           } else {
-            result.instagramError = igData;
+            result.instagramError = igData.error ? igData.error.message : igData;
           }
         } else {
           result.instagramError = "صفحة فيسبوك مو مربوطة بحساب انستقرام أعمال — اربطهم من Meta Business Suite أول.";
@@ -1999,7 +2005,7 @@ function renderDashboard() {
         document.getElementById('anFbReach').textContent = fb.page_impressions != null ? fb.page_impressions : '—';
         document.getElementById('anFbEngaged').textContent = fb.page_engaged_users != null ? fb.page_engaged_users : '—';
         note.textContent = data.instagramError
-          ? '⚠️ فيسبوك مربوط، لكن تحليلات انستقرام: ' + (data.instagramError.error ? data.instagramError.error.message : data.instagramError)
+          ? '⚠️ فيسبوك مربوط، لكن تحليلات انستقرام: ' + data.instagramError
           : 'بيانات ' + data.period + ' — مصدرها مباشرة من Facebook/Instagram Insights API (فيسبوك مربوط).';
         return;
       }
