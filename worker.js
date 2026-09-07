@@ -217,6 +217,22 @@ export default {
      * روابط انستقرام). النتيجة: توكن صفحة فيسبوك يُستخدم للنشر وللتحليلات
      * الحقيقية (فيسبوك + انستقرام معًا، لأن الحساب مربوط بالصفحة أصلًا).
      * -------------------------------------------------------------------- */
+    if (url.pathname === "/fb-start-debug") {
+      const authUrlPreview =
+        "https://www.facebook.com/v21.0/dialog/oauth" +
+        `?client_id=${encodeURIComponent(env.FB_APP_ID || "")}` +
+        `&redirect_uri=${encodeURIComponent(env.FB_REDIRECT_URI || "")}` +
+        `&response_type=code&scope=pages_show_list`;
+      return html(`
+        <h1>معاينة رابط فيسبوك (بدون تحويل)</h1>
+        <p>FB_APP_ID المقروء: <b>${escapeHtml(String(env.FB_APP_ID))}</b> (نوعه: ${typeof env.FB_APP_ID}، طوله: ${String(env.FB_APP_ID || "").length})</p>
+        <p>FB_APP_SECRET موجود؟ <b>${env.FB_APP_SECRET ? "نعم" : "لا"}</b></p>
+        <p>FB_REDIRECT_URI المقروء: <b>${escapeHtml(String(env.FB_REDIRECT_URI))}</b></p>
+        <p>الرابط الكامل:</p>
+        <textarea readonly onclick="this.select()" style="min-height:160px;">${authUrlPreview}</textarea>
+      `);
+    }
+
     if (url.pathname === "/fb-start") {
       if (!env.FB_APP_ID || !env.FB_REDIRECT_URI) {
         return html(errorBlock("متغيرات الإعداد ناقصة", "لازم تضيف FB_APP_ID و FB_REDIRECT_URI بإعدادات الورك أول (FB_APP_ID هو App ID الأساسي بصفحة App settings → Basic، مو IG_APP_ID)."));
