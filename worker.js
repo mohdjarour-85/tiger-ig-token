@@ -1028,16 +1028,19 @@ export default {
 
           const igMetrics = "reach,views,accounts_engaged,total_interactions";
           const igRes = await fetch(
-            `https://graph.facebook.com/v21.0/${igId}/insights?metric=${igMetrics}&period=days_28&access_token=${env.FB_PAGE_ACCESS_TOKEN}`
+            `https://graph.facebook.com/v21.0/${igId}/insights?metric=${igMetrics}&period=days_28&metric_type=total_value&access_token=${env.FB_PAGE_ACCESS_TOKEN}`
           );
           const igData = await igRes.json();
           if (igData.data) {
             for (const m of igData.data) {
-              const vals = m.values || [];
-              result.instagram[m.name] = vals.length ? vals[vals.length - 1].value : null;
+              if (m.total_value && m.total_value.value != null) {
+                result.instagram[m.name] = m.total_value.value;
+              } else if (m.values && m.values.length) {
+                result.instagram[m.name] = m.values[m.values.length - 1].value;
+              }
             }
           } else {
-            result.instagramError = igData.error ? igData.error.message : igData;
+            result.instagramError = igData.error ? igData.error.message : JSON.stringify(igData);
           }
         } else {
           result.instagramError = "صفحة فيسبوك مو مربوطة بحساب انستقرام أعمال — اربطهم من Meta Business Suite أول.";
