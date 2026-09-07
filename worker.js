@@ -222,7 +222,7 @@ export default {
         "https://www.facebook.com/v21.0/dialog/oauth" +
         `?client_id=${encodeURIComponent(env.FB_APP_ID || "")}` +
         `&redirect_uri=${encodeURIComponent(env.FB_REDIRECT_URI || "")}` +
-        `&response_type=code&scope=pages_show_list`;
+        `&response_type=code&config_id=2328532254557116`;
       return html(`
         <h1>معاينة رابط فيسبوك (بدون تحويل)</h1>
         <p>FB_APP_ID المقروء: <b>${escapeHtml(String(env.FB_APP_ID))}</b> (نوعه: ${typeof env.FB_APP_ID}، طوله: ${String(env.FB_APP_ID || "").length})</p>
@@ -237,19 +237,12 @@ export default {
       if (!env.FB_APP_ID || !env.FB_REDIRECT_URI) {
         return html(errorBlock("متغيرات الإعداد ناقصة", "لازم تضيف FB_APP_ID و FB_REDIRECT_URI بإعدادات الورك أول (FB_APP_ID هو App ID الأساسي بصفحة App settings → Basic، مو IG_APP_ID)."));
       }
-      const scope = [
-        "pages_show_list",
-        "pages_read_engagement",
-        "pages_manage_posts",
-        "instagram_basic",
-        "instagram_manage_insights",
-      ].join(",");
       const authUrl =
         "https://www.facebook.com/v21.0/dialog/oauth" +
         `?client_id=${encodeURIComponent(env.FB_APP_ID)}` +
         `&redirect_uri=${encodeURIComponent(env.FB_REDIRECT_URI)}` +
         `&response_type=code` +
-        `&scope=${encodeURIComponent(scope)}`;
+        `&config_id=2328532254557116`;
       return Response.redirect(authUrl, 302);
     }
 
