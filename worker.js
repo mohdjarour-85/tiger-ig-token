@@ -14,9 +14,14 @@
  *   ANTHROPIC_API_KEY   -> مفتاح Claude API (لتوليد الكابشن تلقائيًا)
  *
  * ربط فيسبوك (نشر حقيقي + تحليلات حقيقية):
+ *   FB_APP_ID            -> App ID الأساسي (App settings → Basic، مثلاً
+ *                            1625307945973050) — يختلف عن IG_APP_ID اللي
+ *                            مخصص لـ "API setup with Instagram login" فقط
+ *   FB_APP_SECRET        -> App Secret الأساسي (App settings → Basic،
+ *                            "App Secret" العادي، مو "Instagram app secret")
  *   FB_REDIRECT_URI      -> رابط هذا الورك نفسه + /fb-callback (يُسجَّل بمنتج
- *                            "Facebook Login" بنفس تطبيق Meta الموجود أصلاً،
- *                            منفصل عن قائمة روابط انستقرام)
+ *                            "Facebook Login for Business" بنفس تطبيق Meta
+ *                            الموجود أصلاً، منفصل عن قائمة روابط انستقرام)
  *   FB_PAGE_ID           -> رقم صفحة Tiger Event بفيسبوك (يظهر بعد /fb-start)
  *   FB_PAGE_ACCESS_TOKEN -> توكن الصفحة (يظهر بعد /fb-start) — Secret، ثابت
  *                            ولا ينتهي طالما التطبيق ما انسحبت صلاحياته
@@ -213,8 +218,8 @@ export default {
      * الحقيقية (فيسبوك + انستقرام معًا، لأن الحساب مربوط بالصفحة أصلًا).
      * -------------------------------------------------------------------- */
     if (url.pathname === "/fb-start") {
-      if (!env.IG_APP_ID || !env.FB_REDIRECT_URI) {
-        return html(errorBlock("متغيرات الإعداد ناقصة", "لازم تضيف FB_REDIRECT_URI بإعدادات الورك أول (نفس IG_APP_ID المستخدم أصلاً)."));
+      if (!env.FB_APP_ID || !env.FB_REDIRECT_URI) {
+        return html(errorBlock("متغيرات الإعداد ناقصة", "لازم تضيف FB_APP_ID و FB_REDIRECT_URI بإعدادات الورك أول (FB_APP_ID هو App ID الأساسي بصفحة App settings → Basic، مو IG_APP_ID)."));
       }
       const scope = [
         "pages_show_list",
@@ -225,7 +230,7 @@ export default {
       ].join(",");
       const authUrl =
         "https://www.facebook.com/v21.0/dialog/oauth" +
-        `?client_id=${encodeURIComponent(env.IG_APP_ID)}` +
+        `?client_id=${encodeURIComponent(env.FB_APP_ID)}` +
         `&redirect_uri=${encodeURIComponent(env.FB_REDIRECT_URI)}` +
         `&response_type=code` +
         `&scope=${encodeURIComponent(scope)}`;
@@ -241,9 +246,9 @@ export default {
       try {
         const tokenUrl =
           "https://graph.facebook.com/v21.0/oauth/access_token" +
-          `?client_id=${encodeURIComponent(env.IG_APP_ID)}` +
+          `?client_id=${encodeURIComponent(env.FB_APP_ID)}` +
           `&redirect_uri=${encodeURIComponent(env.FB_REDIRECT_URI)}` +
-          `&client_secret=${encodeURIComponent(env.IG_APP_SECRET)}` +
+          `&client_secret=${encodeURIComponent(env.FB_APP_SECRET)}` +
           `&code=${encodeURIComponent(code)}`;
         const shortRes = await fetch(tokenUrl);
         const shortData = await shortRes.json();
@@ -254,8 +259,8 @@ export default {
         const longUrl =
           "https://graph.facebook.com/v21.0/oauth/access_token" +
           "?grant_type=fb_exchange_token" +
-          `&client_id=${encodeURIComponent(env.IG_APP_ID)}` +
-          `&client_secret=${encodeURIComponent(env.IG_APP_SECRET)}` +
+          `&client_id=${encodeURIComponent(env.FB_APP_ID)}` +
+          `&client_secret=${encodeURIComponent(env.FB_APP_SECRET)}` +
           `&fb_exchange_token=${encodeURIComponent(shortData.access_token)}`;
         const longRes = await fetch(longUrl);
         const longData = await longRes.json();
