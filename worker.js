@@ -1043,6 +1043,38 @@ export default {
       }
     }
 
+    /* تشخيص مخصص لمشكلة تحليلات انستقرام عبر توكن صفحة فيسبوك — يفحص خطوة
+     * بخطوة (معرف حساب انستقرام، بيانات أساسية، ثم متريك وحدة مبسطة) عشان
+     * نعرف بالضبط أي خطوة تفشل ووش رسالة الخطأ الكاملة. */
+    if (url.pathname === "/fb-ig-debug") {
+      if (!env.FB_PAGE_ACCESS_TOKEN || !env.FB_PAGE_ID) {
+        return json({ success: false, error: "فيسبوك مو مربوط" });
+      }
+      const out = {};
+      try {
+        const igLinkRes = await fetch(
+          `https://graph.facebook.com/v21.0/${env.FB_PAGE_ID}?fields=instagram_business_account&access_token=${env.FB_PAGE_ACCESS_TOKEN}`
+        );
+        out.igLink = await igLinkRes.json();
+        const igId = out.igLink.instagram_business_account && out.igLink.instagram_business_account.id;
+
+        if (igId) {
+          const basicRes = await fetch(
+            `https://graph.facebook.com/v21.0/${igId}?fields=username,followers_count,media_count&access_token=${env.FB_PAGE_ACCESS_TOKEN}`
+          );
+          out.basicInfo = await basicRes.json();
+
+          const simpleInsightRes = await fetch(
+            `https://graph.facebook.com/v21.0/${igId}/insights?metric=follower_count&metric_type=total_value&period=day&access_token=${env.FB_PAGE_ACCESS_TOKEN}`
+          );
+          out.simpleInsight = await simpleInsightRes.json();
+        }
+        return json({ success: true, ...out });
+      } catch (e) {
+        return json({ success: false, error: String(e), partial: out });
+      }
+    }
+
     if (url.pathname === "/api/media-insights") {
       const postId = url.searchParams.get("post_id");
       if (!env.IG_ACCESS_TOKEN) return json({ success: false, error: "التوكن ناقص (IG_ACCESS_TOKEN)" });
