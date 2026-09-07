@@ -1027,8 +1027,10 @@ export default {
           if (basicData.followers_count != null) result.instagram.follower_count = basicData.followers_count;
 
           const igMetrics = "reach,views,accounts_engaged,total_interactions";
+          const nowSec = Math.floor(Date.now() / 1000);
+          const since28 = nowSec - 28 * 86400;
           const igRes = await fetch(
-            `https://graph.facebook.com/v21.0/${igId}/insights?metric=${igMetrics}&period=days_28&metric_type=total_value&access_token=${env.FB_PAGE_ACCESS_TOKEN}`
+            `https://graph.facebook.com/v21.0/${igId}/insights?metric=${igMetrics}&metric_type=total_value&period=day&since=${since28}&until=${nowSec}&access_token=${env.FB_PAGE_ACCESS_TOKEN}`
           );
           const igData = await igRes.json();
           if (igData.data) {
