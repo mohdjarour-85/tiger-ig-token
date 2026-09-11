@@ -918,17 +918,22 @@ export default {
       }
     }
 
-    /* النشر الفوري صار غير متزامن: نسجّل المهمة بجدول scheduled_posts
-       ونرجّع jobId فورًا، والنشر الفعلي يشتغل بالخلفية عبر ctx.waitUntil.
-       السبب: النشر على انستقرام/فيسبوك يستغرق أحيانًا 50+ ثانية (مثبت
-       بسجلات Cloudflare)، ومتصفح الجوال يقطع الاتصال قبل وصول الرد
-       فتظهر رسالة "Unexpected end of JSON input" رغم نجاح النشر فعليًا. */
+    /* النشر الفوري: ما فيه أي مهمة خلفية طويلة عبر ctx.waitUntil بعد الآن.
+       السبب: كانت حلقة انتظار معالجة الفيديو بانستقرام (لين 100 ثانية) تشتغل
+       جوّه ctx.waitUntil، وCloudflare يقطعها لو تجاوزت المهلة المسموحة بعد
+       رجوع الرد للمتصفح (رسالة "waitUntil() tasks did not complete...")،
+       فتضل الحالة "قيد المعالجة" للأبد. الحل: هالـ endpoint يسوي بس الخطوة
+       السريعة (إنشاء الحاوية، أو نشر كامل لو صورة) ويرجع فورًا. فحص/إنهاء
+       معالجة الفيديو صار مسؤولية /api/publish-job-status نفسه، اللي أصلاً
+       الواجهة تناديه كل 3 ثواني — كل نبضة تسوي شوي شغل سريع بدل انتظار طويل
+       بمكان وحد. */
     if (url.pathname === "/api/publish-existing" && request.method === "POST") {
       if (!env.IG_ACCESS_TOKEN && !env.FB_PAGE_ACCESS_TOKEN) {
         return json({ success: false, error: "ما فيه أي حساب مربوط (لا انستقرام ولا فيسبوك)" });
       }
       if (!env.DB) return json({ success: false, error: "DB مو مربوط" });
       try {
+        await ensureContainerColumn(env);
         const body = await request.json();
         const key = body.key;
         const caption = body.caption || "";
@@ -938,26 +943,62 @@ export default {
 
         const nowStr = new Date().toISOString().slice(0, 16);
         const insertRes = await env.DB.prepare(
-          "INSERT INTO scheduled_posts (media_key, media_type, caption, scheduled_time, platforms, status) VALUES (?, ?, ?, ?, ?, 'pending')"
+          "INSERT INTO scheduled_posts (media_key, media_type, caption, scheduled_time, platforms, status) VALUES (?, ?, ?, ?, ?, 'processing')"
         ).bind(key, mediaType, caption, nowStr, platforms.join(",")).run();
         const jobId = insertRes.meta.last_row_id;
 
-        ctx.waitUntil(processPublishJob(env, jobId, key, mediaType, caption, platforms));
+        try {
+          const start = await startPublishMediaKey(env, key, mediaType, caption, platforms);
+          if (start.done) {
+            await env.DB.prepare("UPDATE scheduled_posts SET status='posted', post_id=? WHERE id=?")
+              .bind(start.postId, jobId).run();
+          } else {
+            await env.DB.prepare("UPDATE scheduled_posts SET status='processing', ig_container_id=? WHERE id=?")
+              .bind(start.igContainerId, jobId).run();
+          }
+        } catch (e) {
+          await env.DB.prepare("UPDATE scheduled_posts SET status='failed', error_message=? WHERE id=?")
+            .bind(String(e), jobId).run();
+        }
+
         return json({ success: true, jobId });
       } catch (e) {
         return json({ success: false, error: String(e) });
       }
     }
 
-    /* تسأله الواجهة كل 3 ثواني بعد إرسال طلب النشر لمعرفة نتيجته النهائية. */
+    /* تسأله الواجهة كل 3 ثواني بعد إرسال طلب النشر لمعرفة نتيجته النهائية.
+       لو الحالة "processing" وفيه ig_container_id محفوظ، هالاستدعاء نفسه يفحص
+       حالة معالجة الفيديو بانستقرام (نداء سريع وحيد لـ Graph API) وينشر
+       فعليًا لو خلصت — بدل ما ينتظر بمهمة خلفية وحدة طويلة. */
     if (url.pathname === "/api/publish-job-status") {
       const id = url.searchParams.get("id");
       if (!env.DB || !id) return json({ success: false, error: "بيانات ناقصة" });
       try {
-        const row = await env.DB.prepare(
-          "SELECT status, post_id, error_message FROM scheduled_posts WHERE id = ?"
+        await ensureContainerColumn(env);
+        let row = await env.DB.prepare(
+          "SELECT id, status, post_id, error_message, ig_container_id, platforms FROM scheduled_posts WHERE id = ?"
         ).bind(id).first();
         if (!row) return json({ success: false, error: "غير موجود" });
+
+        if (row.status === "processing" && row.ig_container_id) {
+          try {
+            const step = await advanceVideoJob(env, row);
+            if (step.status === "posted") {
+              await env.DB.prepare("UPDATE scheduled_posts SET status='posted', post_id=? WHERE id=?")
+                .bind(step.postId, id).run();
+              row = { ...row, status: "posted", post_id: step.postId };
+            } else if (step.status === "failed") {
+              await env.DB.prepare("UPDATE scheduled_posts SET status='failed', error_message=? WHERE id=?")
+                .bind(step.error, id).run();
+              row = { ...row, status: "failed", error_message: step.error };
+            }
+            // لو لسا "processing" (IN_PROGRESS بانستقرام)، ما نغيّر شي — الواجهة بتسأل مرة ثانية بعد 3 ثواني.
+          } catch (e) {
+            // خطأ مؤقت بفحص الحالة (مثلاً مشكلة شبكة) — لا نفشّل المهمة، نخليها تحاول بالنبضة الجاية.
+          }
+        }
+
         return json({ success: true, status: row.status, postId: row.post_id, error: row.error_message });
       } catch (e) {
         return json({ success: false, error: String(e) });
@@ -1308,7 +1349,10 @@ async function autoPublishNext(env) {
 
 async function runScheduledPosts(env) {
   if (!env.DB || !env.IMAGES) return;
+  await ensureContainerColumn(env);
   const now = new Date().toISOString();
+
+  // 1) بوستات جديدة حان وقتها: نسوي الخطوة السريعة بس (بدون انتظار فيديو).
   const { results } = await env.DB.prepare(
     "SELECT * FROM scheduled_posts WHERE status = 'pending' AND scheduled_time <= ? ORDER BY scheduled_time ASC"
   ).bind(now.slice(0, 16)).all();
@@ -1316,28 +1360,142 @@ async function runScheduledPosts(env) {
   for (const post of results) {
     try {
       const platforms = post.platforms ? String(post.platforms).split(",") : ["instagram"];
-      const result = await publishMediaKey(env, post.media_key, post.media_type, post.caption || "", platforms);
-      await env.DB.prepare("UPDATE scheduled_posts SET status = 'posted', post_id = ? WHERE id = ?")
-        .bind(result.postId, post.id).run();
+      const start = await startPublishMediaKey(env, post.media_key, post.media_type, post.caption || "", platforms);
+      if (start.done) {
+        await env.DB.prepare("UPDATE scheduled_posts SET status = 'posted', post_id = ? WHERE id = ?")
+          .bind(start.postId, post.id).run();
+      } else {
+        await env.DB.prepare("UPDATE scheduled_posts SET status = 'processing', ig_container_id = ? WHERE id = ?")
+          .bind(start.igContainerId, post.id).run();
+      }
     } catch (e) {
       await env.DB.prepare("UPDATE scheduled_posts SET status = 'failed', error_message = ? WHERE id = ?")
         .bind(String(e), post.id).run();
     }
   }
+
+  // 2) بوستات فيديو "processing" من دورة سابقة: نفحص هل خلصت معالجتها بانستقرام.
+  //    (لو لسا IN_PROGRESS، بتتفحص مرة ثانية بالتشغيلة الجاية بعد 15 دقيقة.)
+  const { results: pendingVideos } = await env.DB.prepare(
+    "SELECT * FROM scheduled_posts WHERE status = 'processing' AND ig_container_id IS NOT NULL"
+  ).all();
+
+  for (const post of pendingVideos) {
+    try {
+      const step = await advanceVideoJob(env, post);
+      if (step.status === "posted") {
+        await env.DB.prepare("UPDATE scheduled_posts SET status = 'posted', post_id = ? WHERE id = ?")
+          .bind(step.postId, post.id).run();
+      } else if (step.status === "failed") {
+        await env.DB.prepare("UPDATE scheduled_posts SET status = 'failed', error_message = ? WHERE id = ?")
+          .bind(step.error, post.id).run();
+      }
+    } catch (e) {
+      // خطأ مؤقت بالفحص — نخليه يحاول بالتشغيلة الجاية بدل ما نفشّله فورًا.
+    }
+  }
 }
 
-/* تنفّذ مهمة نشر واحدة بالخلفية (يستدعيها ctx.waitUntil من
-   /api/publish-existing) وتحدّث حالتها بقاعدة البيانات عند الانتهاء —
-   نفس منطق runScheduledPosts أعلاه، بس لسجل واحد يُنشر فورًا بدل مسح دوري. */
-async function processPublishJob(env, jobId, key, mediaType, caption, platforms) {
+/* يضيف عمود ig_container_id لجدول scheduled_posts لو مو موجود (مرة وحدة فقط
+   بحياة الجدول). مغلّفة بـ try/catch لأن D1 يرمي خطأ لو العمود موجود أصلاً
+   ("duplicate column name") — هذا متوقع ونتجاهله بأمان. استدعاؤها بأول كل
+   طلب رخيص وآمن (idempotent). */
+async function ensureContainerColumn(env) {
   try {
-    const result = await publishMediaKey(env, key, mediaType, caption, platforms);
-    await env.DB.prepare("UPDATE scheduled_posts SET status='posted', post_id=? WHERE id=?")
-      .bind(result.postId, jobId).run();
+    await env.DB.prepare("ALTER TABLE scheduled_posts ADD COLUMN ig_container_id TEXT").run();
   } catch (e) {
-    await env.DB.prepare("UPDATE scheduled_posts SET status='failed', error_message=? WHERE id=?")
-      .bind(String(e), jobId).run();
+    // العمود موجود مسبقًا على الأغلب — تجاهل.
   }
+}
+
+/* الخطوة الأولى والسريعة فقط: تنشئ حاوية انستقرام (وتنشر فيسبوك لو مطلوب)
+   بدون أي انتظار لمعالجة الفيديو. ترجع:
+   - { done: true, postId } لو خلص كل شي فعليًا (صور، أو فيديو-فيسبوك-بس)
+   - { done: false, igContainerId } لو فيه فيديو بانستقرام لسا يحتاج معالجة
+   ما فيها أي setTimeout/انتظار طويل — آمنة تمامًا داخل طلب HTTP عادي. */
+async function startPublishMediaKey(env, key, mediaType, caption, platforms) {
+  platforms = platforms && platforms.length ? platforms : ["instagram"];
+  const mediaUrl = `https://${WORKER_HOST}/img/${key}`;
+  const isVideo = mediaType === "video";
+  const ids = [];
+
+  let igContainerId = null;
+
+  if (platforms.includes("instagram")) {
+    if (!env.IG_ACCESS_TOKEN) throw new Error("توكن انستقرام ناقص (IG_ACCESS_TOKEN)");
+    const meRes = await fetch(`https://graph.instagram.com/me?fields=id&access_token=${env.IG_ACCESS_TOKEN}`);
+    const meData = await meRes.json();
+    if (!meData.id) throw new Error("معرف حساب انستقرام: " + JSON.stringify(meData));
+
+    const containerParams = isVideo
+      ? { media_type: "REELS", video_url: mediaUrl, caption: caption || "", access_token: env.IG_ACCESS_TOKEN }
+      : { image_url: mediaUrl, caption: caption || "", access_token: env.IG_ACCESS_TOKEN };
+
+    const containerRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media`, {
+      method: "POST",
+      body: new URLSearchParams(containerParams),
+    });
+    const containerData = await containerRes.json();
+    if (!containerData.id) throw new Error("إنشاء حاوية انستقرام: " + JSON.stringify(containerData));
+
+    if (isVideo) {
+      // فيديو بانستقرام يحتاج معالجة — لا ننتظر هنا. نخزّن الحاوية ونرجع.
+      igContainerId = containerData.id;
+    } else {
+      const publishRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media_publish`, {
+        method: "POST",
+        body: new URLSearchParams({ creation_id: containerData.id, access_token: env.IG_ACCESS_TOKEN }),
+      });
+      const publishData = await publishRes.json();
+      if (!publishData.id) throw new Error("نشر انستقرام: " + JSON.stringify(publishData));
+      ids.push("IG:" + publishData.id);
+    }
+  }
+
+  if (platforms.includes("facebook")) {
+    const fbResult = await publishToFacebook(env, mediaUrl, caption, isVideo);
+    ids.push("FB:" + fbResult.postId);
+  }
+
+  if (igContainerId) {
+    // فيه فيديو بانستقرام لسا قيد المعالجة — الفيسبوك (لو نُشر) خلص فعليًا،
+    // بس ما نقدر نعتبر المهمة "منتهية" لين تخلص معالجة انستقرام. نخزّن أي
+    // نتيجة فيسبوك مؤقتًا برسالة الخطأ عشان advanceVideoJob يدمجها لاحقًا.
+    return { done: false, igContainerId, partialIds: ids };
+  }
+
+  if (!ids.length) throw new Error("ما تحدد أي منصة للنشر");
+  return { done: true, postId: ids.join(" | ") };
+}
+
+/* تفحص حالة معالجة حاوية فيديو انستقرام خطوة وحدة بس (نداء واحد سريع
+   لـ Graph API) — تناديها /api/publish-job-status بكل نبضة polling من
+   الواجهة (كل 3 ثواني). لا يوجد أي setTimeout/انتظار جوّها إطلاقًا. */
+async function advanceVideoJob(env, row) {
+  const statusRes = await fetch(
+    `https://graph.instagram.com/v21.0/${row.ig_container_id}?fields=status_code&access_token=${env.IG_ACCESS_TOKEN}`
+  );
+  const statusData = await statusRes.json();
+
+  if (statusData.status_code === "ERROR") {
+    return { status: "failed", error: "فشلت معالجة الفيديو بانستقرام" };
+  }
+  if (statusData.status_code !== "FINISHED") {
+    return { status: "processing" }; // لسا IN_PROGRESS — نحاول بالنبضة الجاية
+  }
+
+  const meRes = await fetch(`https://graph.instagram.com/me?fields=id&access_token=${env.IG_ACCESS_TOKEN}`);
+  const meData = await meRes.json();
+  if (!meData.id) return { status: "failed", error: "معرف حساب انستقرام: " + JSON.stringify(meData) };
+
+  const publishRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media_publish`, {
+    method: "POST",
+    body: new URLSearchParams({ creation_id: row.ig_container_id, access_token: env.IG_ACCESS_TOKEN }),
+  });
+  const publishData = await publishRes.json();
+  if (!publishData.id) return { status: "failed", error: "نشر انستقرام: " + JSON.stringify(publishData) };
+
+  return { status: "posted", postId: "IG:" + publishData.id };
 }
 
 /* نشر مباشر على صفحة فيسبوك (Tiger Event) عبر Page Access Token.
@@ -1358,64 +1516,6 @@ async function publishToFacebook(env, mediaUrl, caption, isVideo) {
   const postId = data.post_id || data.id;
   if (!postId) throw new Error("فيسبوك: " + JSON.stringify(data));
   return { postId };
-}
-
-/* منطق نشر موحّد (إنشاء حاوية + انتظار معالجة الفيديو لو لزم + نشر نهائي)،
-   يستخدمه كل من: runScheduledPosts (الجدولة التلقائية) و
-   /api/publish-existing (النشر الفوري من لوحة التحكم لملف موجود بالمكتبة).
-   platforms: مصفوفة تحتوي "instagram" و/أو "facebook" — الافتراضي انستقرام
-   بس عشان ما ينكسر أي استدعاء قديم ما يمرر المعامل هذا. */
-async function publishMediaKey(env, key, mediaType, caption, platforms) {
-  platforms = platforms && platforms.length ? platforms : ["instagram"];
-  const mediaUrl = `https://${WORKER_HOST}/img/${key}`;
-  const isVideo = mediaType === "video";
-  const ids = [];
-
-  if (platforms.includes("instagram")) {
-    if (!env.IG_ACCESS_TOKEN) throw new Error("توكن انستقرام ناقص (IG_ACCESS_TOKEN)");
-    const meRes = await fetch(`https://graph.instagram.com/me?fields=id&access_token=${env.IG_ACCESS_TOKEN}`);
-    const meData = await meRes.json();
-    if (!meData.id) throw new Error("معرف حساب انستقرام: " + JSON.stringify(meData));
-
-    const containerParams = isVideo
-      ? { media_type: "REELS", video_url: mediaUrl, caption: caption || "", access_token: env.IG_ACCESS_TOKEN }
-      : { image_url: mediaUrl, caption: caption || "", access_token: env.IG_ACCESS_TOKEN };
-
-    const containerRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media`, {
-      method: "POST",
-      body: new URLSearchParams(containerParams),
-    });
-    const containerData = await containerRes.json();
-    if (!containerData.id) throw new Error("إنشاء حاوية انستقرام: " + JSON.stringify(containerData));
-
-    if (isVideo) {
-      let ready = false;
-      for (let i = 0; i < 20; i++) {
-        await new Promise((r) => setTimeout(r, 5000));
-        const statusRes = await fetch(`https://graph.instagram.com/v21.0/${containerData.id}?fields=status_code&access_token=${env.IG_ACCESS_TOKEN}`);
-        const statusData = await statusRes.json();
-        if (statusData.status_code === "FINISHED") { ready = true; break; }
-        if (statusData.status_code === "ERROR") throw new Error("فشلت معالجة الملف بانستقرام");
-      }
-      if (!ready) throw new Error("استغرقت معالجة انستقرام وقت طويل");
-    }
-
-    const publishRes = await fetch(`https://graph.instagram.com/v21.0/${meData.id}/media_publish`, {
-      method: "POST",
-      body: new URLSearchParams({ creation_id: containerData.id, access_token: env.IG_ACCESS_TOKEN }),
-    });
-    const publishData = await publishRes.json();
-    if (!publishData.id) throw new Error("نشر انستقرام: " + JSON.stringify(publishData));
-    ids.push("IG:" + publishData.id);
-  }
-
-  if (platforms.includes("facebook")) {
-    const fbResult = await publishToFacebook(env, mediaUrl, caption, isVideo);
-    ids.push("FB:" + fbResult.postId);
-  }
-
-  if (!ids.length) throw new Error("ما تحدد أي منصة للنشر");
-  return { postId: ids.join(" | ") };
 }
 
 function errorBlock(title, detail) {
